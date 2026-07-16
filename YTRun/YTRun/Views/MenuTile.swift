@@ -1,0 +1,74 @@
+//
+//  MenuTile.swift
+//  YTRun
+//
+
+import SwiftUI
+
+// A colorful icon tile used for Home screen navigation — `NavigationLink`
+// with `.buttonStyle(.plain)` strips away the default blue/list styling so
+// our own gradient background shows through untouched.
+struct MenuTile<Destination: View>: View {
+    let title: String
+    let systemImage: String
+    let color: Color
+    var fullWidth = false
+    @ViewBuilder var destination: () -> Destination
+
+    var body: some View {
+        NavigationLink {
+            destination()
+        } label: {
+            if fullWidth {
+                HStack(spacing: 12) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 20, weight: .semibold))
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .opacity(0.7)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .frame(maxWidth: .infinity)
+                .background(color.gradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 26, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .multilineTextAlignment(.leading)
+                }
+                .foregroundStyle(.white)
+                .padding(16)
+                .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+                .background(color.gradient, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+#Preview {
+    VStack(spacing: 16) {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+            MenuTile(title: "Watch YouTube", systemImage: "play.rectangle.fill", color: .red) {
+                Text("Destination")
+            }
+            MenuTile(title: "Start a Run", systemImage: "figure.run", color: .orange) {
+                Text("Destination")
+            }
+        }
+        MenuTile(title: "Settings", systemImage: "gearshape.fill", color: .gray, fullWidth: true) {
+            Text("Destination")
+        }
+    }
+    .padding()
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<string>location</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>YTRun tracks your run distance and duration with GPS to decide whether it qualifies for extra YouTube viewing time.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>YTRun tracks your run with GPS even while your phone is locked, so a run in your pocket still counts.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
+</dict>
+</plist>
