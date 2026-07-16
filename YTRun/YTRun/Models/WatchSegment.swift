@@ -43,6 +43,13 @@ final class WatchSegment {
     // re-fetch it.
     var videoTitle: String?
 
+    // `true` once the user has explicitly redacted this video from
+    // history (e.g. watched something they don't want a record of). The
+    // segment itself is kept — and still counts toward daily/binge
+    // totals — but `videoURL`/`videoTitle`/`channelName` are wiped and
+    // never re-populated. See `WatchSegment.hide(_:)`.
+    var isHidden: Bool = false
+
     init(
         date: Date,
         durationSeconds: Int,
@@ -50,7 +57,8 @@ final class WatchSegment {
         isCarAudio: Bool,
         isShorts: Bool,
         channelName: String?,
-        videoURL: String?
+        videoURL: String?,
+        isHidden: Bool = false
     ) {
         self.date = date
         self.durationSeconds = durationSeconds
@@ -60,5 +68,21 @@ final class WatchSegment {
         self.channelName = channelName
         self.videoURL = videoURL
         self.videoTitle = nil
+        self.isHidden = isHidden
+    }
+
+    // Permanently strips identifying info from every segment belonging to
+    // one video (they were split across several stretches if the phone
+    // was locked/unlocked mid-watch) — irreversible by design, since the
+    // whole point is "don't keep a record of what this was." Duration and
+    // view/listen/car/Shorts flags are left alone so daily totals stay
+    // accurate.
+    static func hide(_ group: [WatchSegment]) {
+        for segment in group {
+            segment.videoURL = nil
+            segment.videoTitle = nil
+            segment.channelName = nil
+            segment.isHidden = true
+        }
     }
 }

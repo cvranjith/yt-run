@@ -189,6 +189,12 @@ Note: View/Listen/Car is purely a Daily History categorization — it does NOT c
 
 Implementation: `WatchSegment` (SwiftData) logs continuous stretches of consistent view/listen/car + Shorts/video + channel + video URL, closed and persisted whenever any of those change (see `WatchHistoryRecorder`). The Daily History UI aggregates these grouped by calendar day, alongside that day's `RunRecord` entries.
 
+The per-day detail screen also lists individual videos watched that day (segments collapsed back into one row per video URL, with total watched time — not the video's full length, which YouTube doesn't expose without the paid Data API). Titles are resolved on-demand via the same oEmbed lookup used by Cloud Sync, cached back onto the segment once fetched. The "Videos" section is the last section on the day-detail screen.
+
+Tapping a video opens a detail screen (`VideoDetailView`) showing its channel, type (Shorts/video), and a View/Listen/Car time breakdown for that specific video — with a separate "Watch Again" button to actually reopen it in the in-app YouTube view (still subject to the daily/binge gate, same as any other watch; there's no "escape" link that opens outside the app, consistent with the app's whole premise). Reopening loads the URL in the destination's `onAppear` rather than a tap gesture layered on the `NavigationLink` — the latter silently breaks navigation because the two gesture recognizers fight each other.
+
+**Hiding a video**: either from a swipe action on the Videos list or a button on `VideoDetailView`, a video can be permanently redacted (`WatchSegment.hide(_:)`) — wipes `videoURL`/`videoTitle`/`channelName` on every segment belonging to it and sets `isHidden = true`, but leaves `durationSeconds`/view-listen-car/Shorts flags untouched, so daily totals and the Totals/Content-type sections stay accurate. Irreversible by design (no "undo" — the whole point is not keeping a record of what it was). All hidden segments across a day are merged into a single "Hidden video" row rather than shown separately, since redacted entries are intentionally indistinguishable from each other.
+
 ---
 
 # Cloud Sync (manual)

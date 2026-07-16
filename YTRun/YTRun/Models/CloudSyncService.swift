@@ -96,7 +96,7 @@ final class CloudSyncService: ObservableObject {
 
         var resolved: [String: String] = [:]
         for urlString in uniqueURLs {
-            if let title = await fetchOEmbedTitle(for: urlString) {
+            if let title = await YouTubeOEmbed.fetchTitle(for: urlString) {
                 resolved[urlString] = title
             }
         }
@@ -107,34 +107,6 @@ final class CloudSyncService: ObservableObject {
                 segment.videoTitle = title
             }
         }
-    }
-
-    private func fetchOEmbedTitle(for videoURLString: String) async -> String? {
-        guard
-            var components = URLComponents(string: "https://www.youtube.com/oembed"),
-            !videoURLString.isEmpty
-        else { return nil }
-
-        components.queryItems = [
-            URLQueryItem(name: "url", value: videoURLString),
-            URLQueryItem(name: "format", value: "json"),
-        ]
-        guard let requestURL = components.url else { return nil }
-
-        var request = URLRequest(url: requestURL)
-        request.timeoutInterval = 8
-
-        guard
-            let (data, response) = try? await URLSession.shared.data(for: request),
-            let http = response as? HTTPURLResponse, http.statusCode == 200,
-            let decoded = try? JSONDecoder().decode(OEmbedResponse.self, from: data)
-        else { return nil }
-
-        return decoded.title
-    }
-
-    private struct OEmbedResponse: Decodable {
-        let title: String
     }
 
     // MARK: - Day selection
