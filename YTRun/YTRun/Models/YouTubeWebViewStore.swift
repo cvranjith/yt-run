@@ -24,6 +24,14 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     @Published private(set) var isPlaying = false
     private(set) var lastLoadedURL: URL?
 
+    // Mirrors the WKWebView's own back/forward history — drives the
+    // toolbar's Back/Forward buttons (disabled when there's nowhere to
+    // go). Kept in sync via KVO through Combine's `publisher(for:)`
+    // rather than polled, since WKWebView updates these as navigation
+    // happens.
+    @Published private(set) var canGoBack = false
+    @Published private(set) var canGoForward = false
+
     // Live page info reported by the JS bridge below — updates as the
     // user navigates within YouTube (including Shorts swipes, which don't
     // trigger a normal page-load navigation). Used by
@@ -107,6 +115,13 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
 
         configureAudioSession()
         configureRemoteCommandCenter()
+
+        webView.publisher(for: \.canGoBack)
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$canGoBack)
+        webView.publisher(for: \.canGoForward)
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$canGoForward)
     }
 
     // Loads a URL only if it's actually different from what's already
@@ -121,6 +136,20 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
 
     func pause() {
         webView.evaluateJavaScript("window.__ytrunPause && window.__ytrunPause();")
+    }
+
+    // Standard browser controls — for when a video/page gets stuck (the
+    // WKWebView equivalent of a spinning tab that just needs a refresh).
+    func goBack() {
+        webView.goBack()
+    }
+
+    func goForward() {
+        webView.goForward()
+    }
+
+    func reload() {
+        webView.reload()
     }
 
     // Stronger than `pause()` alone. `evaluateJavaScript` calls made while

@@ -162,6 +162,8 @@ Embedded via `WKWebView` pointed at youtube.com, using a **persistent** (non-eph
 
 Google account login is **not required**. Using YouTube as a guest is acceptable — YouTube's guest recommendations still adapt to watch history within the persisted session. Login remains a "nice to have," not a hard requirement.
 
+Standard browser controls (Back, Forward, Reload) live in the YouTube screen's toolbar, backed directly by the WKWebView's own history (`canGoBack`/`canGoForward` mirrored via KVO). Reload exists specifically for when a video gets stuck (spinning/stalled) without needing to leave the screen and lose the ability to go forward again — the same fix as refreshing a stuck tab in a normal browser.
+
 ---
 
 # Background Audio

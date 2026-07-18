@@ -95,6 +95,30 @@ struct YouTubeView: View {
         // since the page has its own chrome.
         .ignoresSafeArea(edges: .bottom)
         .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button {
+                    webViewStore.goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!webViewStore.canGoBack)
+                .accessibilityLabel("Back")
+
+                Button {
+                    webViewStore.goForward()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!webViewStore.canGoForward)
+                .accessibilityLabel("Forward")
+
+                Button {
+                    webViewStore.reload()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("Reload — use this if a video gets stuck")
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
                     isShowingURLEntry = true
