@@ -27,6 +27,8 @@ final class AppSettings: ObservableObject {
         static let weightKg = "weightKg"
         static let carBluetoothDeviceName = "carBluetoothDeviceName"
         static let restrictShorts = "restrictShorts"
+        static let listenRatePercent = "listenRatePercent"
+        static let carRatePercent = "carRatePercent"
     }
 
     private enum Defaults {
@@ -44,6 +46,12 @@ final class AppSettings: ObservableObject {
         static let qualifyingDistanceKm = 5.0
         static let qualifyingDurationMinutes = 30
         static let weightKg = 70.0
+        // Both expressed as "% of a real second that counts toward the
+        // daily/binge totals" — e.g. 50 means 10 real minutes of listening
+        // only uses up 5 minutes of allowance. View (foreground) is always
+        // 100% and isn't configurable.
+        static let listenRatePercent = 50
+        static let carRatePercent = 10
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -108,6 +116,22 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(restrictShorts, forKey: Keys.restrictShorts) }
     }
 
+    // How much of a real second of background listening counts toward
+    // the daily/binge totals — see `UsageTracker.recordTick`. 50 means
+    // watching in the background costs half as much allowance as
+    // actually looking at the screen.
+    @Published var listenRatePercent: Int {
+        didSet { UserDefaults.standard.set(listenRatePercent, forKey: Keys.listenRatePercent) }
+    }
+
+    // Same idea as `listenRatePercent`, but for audio routed to a car
+    // (CarPlay or a matched Bluetooth car stereo) — usually set lower
+    // than the listen rate, since car listening is the most "passive"
+    // mode.
+    @Published var carRatePercent: Int {
+        didSet { UserDefaults.standard.set(carRatePercent, forKey: Keys.carRatePercent) }
+    }
+
     init() {
         let defaults = UserDefaults.standard
 
@@ -132,5 +156,9 @@ final class AppSettings: ObservableObject {
             ?? Defaults.weightKg
         self.carBluetoothDeviceName = defaults.string(forKey: Keys.carBluetoothDeviceName) ?? ""
         self.restrictShorts = defaults.bool(forKey: Keys.restrictShorts)
+        self.listenRatePercent = defaults.object(forKey: Keys.listenRatePercent) as? Int
+            ?? Defaults.listenRatePercent
+        self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int
+            ?? Defaults.carRatePercent
     }
 }

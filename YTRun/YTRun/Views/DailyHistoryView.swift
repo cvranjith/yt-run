@@ -11,7 +11,10 @@ struct DailyHistoryView: View {
     @Query(sort: \RunRecord.date, order: .reverse) private var runs: [RunRecord]
 
     @Environment(\.modelContext) private var modelContext
-    @StateObject private var cloudSync = CloudSyncService()
+    // Shared with `ContentView`/`YouTubeView`, which also trigger syncs
+    // implicitly — this screen just adds a manual button on top of the
+    // same in-flight/last-synced state, rather than owning its own.
+    @EnvironmentObject private var cloudSync: CloudSyncService
 
     // Every calendar day that has either watch history or a run, newest
     // first — the union is what makes a "day" worth showing in the list.
@@ -137,4 +140,5 @@ private struct DayRow: View {
         DailyHistoryView()
     }
     .modelContainer(for: [WatchSegment.self, RunRecord.self], inMemory: true)
+    .environmentObject(CloudSyncService())
 }

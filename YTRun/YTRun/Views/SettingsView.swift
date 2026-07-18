@@ -88,6 +88,19 @@ struct SettingsView: View {
             }
 
             Section {
+                Stepper(value: $settings.listenRatePercent, in: 0...100, step: 5) {
+                    percentRow(title: "Listen rate", percent: settings.listenRatePercent)
+                }
+                Stepper(value: $settings.carRatePercent, in: 0...100, step: 5) {
+                    percentRow(title: "Car rate", percent: settings.carRatePercent)
+                }
+            } header: {
+                Text("Background listening rate")
+            } footer: {
+                Text("How much of your daily/binge allowance background listening actually costs, relative to watching with the screen on (always 100%). E.g. a 50% listen rate means 10 minutes of background listening only uses 5 minutes of allowance. The daily/binge limits themselves don't change — only how fast background listening eats into them.")
+            }
+
+            Section {
                 TextField("e.g. BYD", text: $settings.carBluetoothDeviceName)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
@@ -113,6 +126,7 @@ struct SettingsView: View {
                 Button("Add 5 min to today's usage") {
                     for _ in 0..<300 {
                         usageTracker.recordTick(
+                            weight: 1.0,
                             bingeLimitMinutes: settings.bingeLimitMinutes,
                             cooldownMinutes: settings.cooldownMinutes,
                             bingeResetAfterMinutes: settings.bingeResetAfterMinutes
@@ -147,6 +161,15 @@ struct SettingsView: View {
             Text(title)
             Spacer()
             Text("\(minutes) min")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func percentRow(title: String, percent: Int) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text("\(percent)%")
                 .foregroundStyle(.secondary)
         }
     }

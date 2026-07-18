@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import SwiftData
 
 // In SwiftUI, a "View" is not a UIView on screen — it's a lightweight
 // value type (a struct) that describes what the UI *should* look like
@@ -29,6 +30,13 @@ struct ContentView: View {
     // an in-progress run survive navigating back to Home, so returning to
     // "Start a Run" resumes it instead of starting a second one.
     @StateObject private var runTracker = RunTracker()
+    // Owned here (rather than by DailyHistoryView, which just shows a
+    // manual button for it) so it can also be triggered implicitly from
+    // app-foreground events like this screen and the YouTube screen
+    // appearing, sharing the same in-flight/last-synced state either way.
+    @StateObject private var cloudSync = CloudSyncService()
+
+    @Environment(\.modelContext) private var modelContext
 
     private let gridColumns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible())]
 
@@ -72,6 +80,7 @@ struct ContentView: View {
         .environmentObject(usageTracker)
         .environmentObject(webViewStore)
         .environmentObject(runTracker)
+        .environmentObject(cloudSync)
         .onAppear {
             // Lets the Lock Screen / Control Center play button respect
             // the app's own lock state — without this, tapping play there
@@ -84,6 +93,12 @@ struct ContentView: View {
             // Lets the YouTube screen respect Settings' "Restrict Shorts"
             // toggle — see `YouTubeWebViewStore`.
             webViewStore.isShortsRestricted = { [settings] in settings.restrictShorts }
+
+            // Implicit sync trigger #1: the app being opened at all. Runs
+            // silently in the background — `cloudSync` already tracks
+            // its own in-flight/last-synced/error state for any UI (the
+            // Daily History screen) that wants to show it.
+            Task { await cloudSync.sync(modelContext: modelContext) }
         }
     }
 
@@ -137,4 +152,5 @@ struct ContentView: View {
 // the full app on a simulator/device — handy while iterating on layout.
 #Preview {
     ContentView()
+        .modelContainer(for: [RunRecord.self, WatchSegment.self], inMemory: true)
 }

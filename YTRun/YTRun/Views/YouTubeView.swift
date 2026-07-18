@@ -13,6 +13,7 @@ struct YouTubeView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var webViewStore: YouTubeWebViewStore
+    @EnvironmentObject var cloudSync: CloudSyncService
 
     @StateObject private var historyRecorder = WatchHistoryRecorder()
     @Environment(\.modelContext) private var modelContext
@@ -47,23 +48,40 @@ struct YouTubeView: View {
                 // scrolling/interacting.
                 .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
                     if webViewStore.isPlaying {
+                        let isBackground = scenePhase != .active
+                        // Only worth checking the audio route while
+                        // actually backgrounded — foreground playback is
+                        // always "View" regardless of output.
+                        let isCarAudio = isBackground && CarAudioDetector.isCarAudioActive(carDeviceName: settings.carBluetoothDeviceName)
+                        let weight: Double = !isBackground ? 1.0
+                            : (isCarAudio ? Double(settings.carRatePercent) : Double(settings.listenRatePercent)) / 100.0
+
                         usageTracker.recordTick(
+                            weight: weight,
                             bingeLimitMinutes: settings.bingeLimitMinutes,
                             cooldownMinutes: settings.cooldownMinutes,
                             bingeResetAfterMinutes: settings.bingeResetAfterMinutes
                         )
-                        let isBackground = scenePhase != .active
                         historyRecorder.tick(
                             isBackground: isBackground,
-                            // Only worth checking the audio route while
-                            // actually backgrounded — foreground playback
-                            // is always "View" regardless of output.
-                            isCarAudio: isBackground && CarAudioDetector.isCarAudioActive(carDeviceName: settings.carBluetoothDeviceName),
+                            isCarAudio: isCarAudio,
                             isShorts: webViewStore.currentURL?.path.contains("/shorts/") ?? false,
                             channelName: webViewStore.currentChannelName,
                             videoURL: webViewStore.currentURL?.absoluteString,
                             modelContext: modelContext
                         )
+
+                        // Checked right here, in the same reliable
+                        // per-second callback that's already proven to
+                        // keep firing in the background (that's how usage
+                        // gets tracked at all while locked) — rather than
+                        // relying solely on `.onChange(of: isLocked)`
+                        // below, whose SwiftUI-render-driven firing can
+                        // lag while the app isn't actually on screen,
+                        // letting audio keep playing well past the limit.
+                        if isLocked {
+                            webViewStore.forceStopAudio()
+                        }
                     } else {
                         usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
                         historyRecorder.flush(modelContext: modelContext)
@@ -97,10 +115,19 @@ struct YouTubeView: View {
             if webViewStore.lastLoadedURL == nil {
                 webViewStore.load(Self.homeURL)
             }
+            // Harmless if already active — makes sure playback can
+            // actually resume after a previous lock forcibly deactivated
+            // the audio session (see `forceStopAudio`).
+            webViewStore.reactivateAudioSession()
+            // Implicit sync trigger #2: opening the YouTube screen
+            // itself ("whenever I click watch"). `CloudSyncService.sync`
+            // already no-ops if a sync is already in flight, so this is
+            // safe to fire alongside the one in `ContentView.onAppear`.
+            Task { await cloudSync.sync(modelContext: modelContext) }
         }
         .onDisappear {
             // Covers fully leaving this screen (e.g. tapping back to Home).
-            webViewStore.pause()
+            webViewStore.forceStopAudio()
             historyRecorder.flush(modelContext: modelContext)
         }
         .onChange(of: isLocked) { _, locked in
@@ -108,9 +135,15 @@ struct YouTubeView: View {
             // the daily/binge limit mid-video) — swapping to `LockedView`
             // doesn't tear down the persistent web view the way the old
             // per-visit web view used to, so it needs an explicit pause.
+            // Kept as a second line of defense alongside the timer-tick
+            // check above; this one also handles becoming locked via a
+            // path that doesn't go through a tick (e.g. midnight rollover
+            // with the app already open).
             if locked {
-                webViewStore.pause()
+                webViewStore.forceStopAudio()
                 historyRecorder.flush(modelContext: modelContext)
+            } else {
+                webViewStore.reactivateAudioSession()
             }
         }
     }
@@ -217,4 +250,5 @@ struct YouTubeView: View {
     .environmentObject(AppSettings())
     .environmentObject(UsageTracker())
     .environmentObject(YouTubeWebViewStore())
+    .environmentObject(CloudSyncService())
 }

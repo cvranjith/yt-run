@@ -123,6 +123,37 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         webView.evaluateJavaScript("window.__ytrunPause && window.__ytrunPause();")
     }
 
+    // Stronger than `pause()` alone. `evaluateJavaScript` calls made while
+    // the app is backgrounded (the exact moment this matters — the limit
+    // being hit while the phone is locked) aren't guaranteed to run
+    // promptly: the WKWebView content process can be suspended for
+    // rendering/JS purposes even while its already-established audio
+    // keeps playing, so the JS `pause()` can silently no-op and audio
+    // just keeps going until the user notices. Deactivating the audio
+    // session stops output at the OS level regardless of WKWebView's own
+    // state, so it's used as the real enforcement mechanism; the JS call
+    // is kept alongside it so the page's own UI (its play/pause button)
+    // reflects the paused state too when it does get a chance to run.
+    func forceStopAudio() {
+        pause()
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("Failed to deactivate audio session: \(error)")
+        }
+    }
+
+    // Re-activates the audio session after a `forceStopAudio()` call, so
+    // playback can actually resume once allowed again (e.g. after a run
+    // clears a cooldown). Safe to call even if already active.
+    func reactivateAudioSession() {
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("Failed to reactivate audio session: \(error)")
+        }
+    }
+
     private static func isShortsURL(_ url: URL?) -> Bool {
         url?.path.contains("/shorts/") ?? false
     }
@@ -158,6 +189,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
 
         commandCenter.playCommand.addTarget { [weak self] _ in
             guard let self, self.isPlaybackAllowed() else { return .commandFailed }
+            self.reactivateAudioSession()
             self.webView.evaluateJavaScript("window.__ytrunPlay && window.__ytrunPlay();")
             return .success
         }
@@ -277,6 +309,19 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             return null;
         }
 
+        // Best-effort grab of the HTML around where the channel name
+        // should be, captured only on a scrape miss — sent back to Swift
+        // so a real-world failure case can be inspected remotely (see
+        // `ChannelScrapeDebugLog`) instead of only being guessed at.
+        function captureDebugHTML() {
+            var container = document.querySelector('ytd-watch-metadata')
+                || document.querySelector('ytm-slim-video-metadata-renderer')
+                || document.querySelector('#meta-contents')
+                || document.querySelector('ytd-reel-player-header-renderer')
+                || document.body;
+            return container ? container.outerHTML.substring(0, 4000) : null;
+        }
+
         var lastURL = null;
         var lastChannel = null;
 
@@ -286,7 +331,8 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             if (url !== lastURL || channel !== lastChannel) {
                 lastURL = url;
                 lastChannel = channel;
-                window.webkit.messageHandlers.pageInfo.postMessage({ url: url, channel: channel });
+                var debugHTML = channel ? null : captureDebugHTML();
+                window.webkit.messageHandlers.pageInfo.postMessage({ url: url, channel: channel, debugHTML: debugHTML });
             }
         }
 
@@ -351,6 +397,12 @@ extension YouTubeWebViewStore: WKScriptMessageHandler {
             let url = (dict["url"] as? String).flatMap(URL.init(string:))
             currentURL = url
             currentChannelName = dict["channel"] as? String
+
+            if currentChannelName == nil,
+               let urlString = dict["url"] as? String,
+               let debugHTML = dict["debugHTML"] as? String {
+                ChannelScrapeDebugLog.record(url: urlString, html: debugHTML)
+            }
 
             // Catches Shorts entered via in-page (pushState) navigation —
             // e.g. swiping into the Shorts feed — which `decidePolicyFor`

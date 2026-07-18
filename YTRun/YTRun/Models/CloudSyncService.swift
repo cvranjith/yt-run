@@ -20,9 +20,14 @@ import Combine
 // `ytrun/`-only prefix gets a 401 "PAR does not exist" from OCI), hence
 // nesting under `fit/` rather than using `ytrun/` as a top-level prefix.
 //
-// Manual only, by design — no background/scheduled sync. iOS background
-// tasks don't run on a reliable clock, so "every hour" isn't actually
-// achievable; a button the user taps is simpler and predictable.
+// Triggered implicitly on app-foreground events (see `ContentView`,
+// `YouTubeView`) rather than on any kind of OS-scheduled background
+// timer — iOS background tasks don't run on a reliable clock, so "every
+// hour" isn't actually achievable, but "whenever the app is actually
+// open" is, and `daysNeedingSync` already re-syncs any day since the
+// last successful sync (tracked via `lastSyncAt`, in UserDefaults), so a
+// missed day (app not opened yesterday) catches up automatically on the
+// next sync. A manual "Sync to Cloud" button remains available too.
 //
 // The PAR itself grants write access to anyone who has it, so it lives in
 // Secrets.swift (gitignored, not committed) rather than here — see
@@ -70,6 +75,10 @@ final class CloudSyncService: ObservableObject {
             if !days.isEmpty {
                 try await updateIndex(with: days)
             }
+
+            // Best-effort, like title resolution — a failed debug push
+            // shouldn't fail the whole sync.
+            await pushDebugLogIfNeeded()
 
             let now = Date()
             lastSyncAt = now
@@ -123,6 +132,25 @@ final class CloudSyncService: ObservableObject {
             .map { calendar.startOfDay(for: $0.date) }
             .filter { cutoff == nil || $0 >= cutoff! }
         return Array(Set(days))
+    }
+
+    // MARK: - Debug log (temporary — see `ChannelScrapeDebugLog`)
+
+    // Pushes the local channel-scrape-miss log to its own path (not under
+    // `data/`, since it's not watch history) so it can be inspected
+    // remotely without needing HTML manually relayed. Overwrites in full
+    // each time — the local log is already capped, so this is always
+    // small.
+    private func pushDebugLogIfNeeded() async {
+        let entries = ChannelScrapeDebugLog.load()
+        guard !entries.isEmpty, let body = try? JSONEncoder().encode(entries) else { return }
+        guard let url = URL(string: Self.parBase + "fit/ytrun/debug/channel-misses.json") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     // MARK: - Upload

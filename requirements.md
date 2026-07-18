@@ -152,6 +152,8 @@ Enforce two independent caps:
 2. Binge limit + cooldown: hitting the binge limit (cumulative minutes, pauses don't reset it) immediately locks YouTube for the cooldown duration. Example: binge limit 20 min, cooldown 40 min — start watching at 10:00, hit the limit at 10:20, locked until 11:00 *if you don't run*. A run (real or simulated) either ends an active cooldown early OR extends the daily allowance — never both from the same run. If you're in a cooldown when the run completes, it just ends the cooldown (no extra daily minutes); otherwise it tops up the daily allowance as usual.
 3. Binge inactivity reset (`bingeResetAfterMinutes`, default 30 min, independent of the cooldown duration): a *partial* binge session (cumulative watch time below the binge limit, so no cooldown was ever triggered) resets to 0 on its own after this many minutes without any watching. Without this, a partial session would otherwise sit there indefinitely — only fully hitting the limit (→ cooldown → reset), a run, or midnight ever cleared it.
 
+**Weighted consumption rate by mode**: the daily/binge *limits* themselves are unchanged (still 60/20 min by default), but how fast real time eats into them now depends on View vs. Listen vs. Car — foreground viewing always counts at 100%; background Listen and Car each have their own configurable rate (`listenRatePercent`/`carRatePercent` in Settings, default 50%/10%). E.g. at the defaults, 10 real minutes of background listening only uses 5 minutes of allowance, and 10 real minutes of car audio only uses 1. `UsageTracker.recordTick(weight:...)` accumulates the weighted (possibly fractional) seconds and only advances the integer counters once they cross a whole second, so low rates don't get rounded away to zero. `WatchSegment`/Daily History still records the *real* unweighted seconds watched — only the gate's counters are weighted.
+
 ---
 
 # YouTube Playback
@@ -174,6 +176,8 @@ Implementation approach:
 
 Note: this is the highest-risk/most-experimental part of the MVP — mobile web pages often fight background playback, so this may take a few iterations to get reliable on-device.
 
+**Bug fix — audio surviving past the lock**: `evaluateJavaScript` calls made while backgrounded aren't guaranteed to run promptly (the WKWebView content process can be suspended for rendering/JS purposes even while its already-established audio output keeps playing), so a JS-only `pause()` could silently no-op right when the daily/binge limit was hit while the phone was locked — audio kept playing straight through the Locked screen. Fixed with `YouTubeWebViewStore.forceStopAudio()`, which deactivates the `AVAudioSession` (an OS-level stop, independent of WKWebView's own state) alongside the JS pause call, checked synchronously inside the same per-second timer tick that increments usage — not only via a separate `onChange(of: isLocked)`, whose SwiftUI-render-driven firing can lag while the app isn't on screen. `reactivateAudioSession()` re-enables playback once allowed again (e.g. after a run, or reopening the YouTube screen).
+
 ---
 
 # Daily History
@@ -182,7 +186,7 @@ A "Daily History" screen (list of past days, tap into a detail view) shows what 
 
 - **View vs. Listen vs. Car** — three-way split, reliable-to-best-effort. `scenePhase == .active` (foregrounded, screen on) = View. Backgrounded (locked/switched away, audio still playing) splits further into Listen vs. Car based on the current `AVAudioSession` output route: a real CarPlay connection is detected automatically (`.carAudio` port type); a plain Bluetooth car stereo (most cars — indistinguishable from any other Bluetooth accessory to iOS) requires the car's Bluetooth device name to be entered in Settings, matched as a case-insensitive substring. See `CarAudioDetector`.
 - **Shorts vs. regular videos** — best-effort. Detected via URL pattern (`/shorts/` vs `/watch`). YouTube's Shorts feed scrolls between clips without always triggering a full page navigation, so a JS bridge (patched `history.pushState` + periodic polling) is used to catch those transitions, but rapid swiping may still undercount individual clips.
-- **Channel name** — best-effort. Scraped from the page via a handful of known CSS selectors. Fragile: YouTube can change its markup at any time without notice, silently breaking this (falls back to "Unknown" rather than crashing).
+- **Channel name** — best-effort. Scraped from the page via a handful of known CSS selectors/microdata. Fragile: YouTube can change its markup at any time without notice, silently breaking this (falls back to "Unknown" rather than crashing). When extraction misses, `ChannelScrapeDebugLog` captures a snippet of the page's HTML around where the channel should be, capped at the last 30 misses in UserDefaults, and `CloudSyncService` pushes it to `fit/ytrun/debug/channel-misses.json` on every sync — a temporary remote-debugging aid so a real failure case can be inspected without HTML being manually relayed. Delete this mechanism once scraping is reliable.
 - **Content category** (gaming/music/education/podcast/etc.) — explicitly NOT implemented. Not reliably obtainable without the paid YouTube Data API, which reopens the same cost problem as the rejected Strava integration.
 
 Note: View/Listen/Car is purely a Daily History categorization — it does NOT change daily/binge limit enforcement. Car-mode listening still counts against the same limits as any other listening.
@@ -197,14 +201,16 @@ Tapping a video opens a detail screen (`VideoDetailView`) showing its channel, t
 
 ---
 
-# Cloud Sync (manual)
+# Cloud Sync
 
 Scope: only videos watched *through this app's gate* — not full cross-device YouTube history. (YouTube's Data API has no endpoint for a user's watch history at all, even with OAuth consent — this is a hard platform limitation, not a cost/quota one like Strava.)
 
-A "Sync to Cloud" button (Daily History screen) pushes local watch history to the same OCI Object Storage bucket used by the `screentime` and `we-gym-with-w` projects (same PAR), under `fit/ytrun/data/` — the PAR is scoped to only permit object names starting with `fit/`, confirmed against `we-gym-with-w`'s own `PFX = "fit/"` constant. One JSON file per day (`fit/ytrun/data/<date>.json`), full overwrite each time (not append), plus a maintained `index.json` listing which dates exist — same convention as `screentime/push_data.py`.
+Pushes local watch history to the same OCI Object Storage bucket used by the `screentime` and `we-gym-with-w` projects (same PAR), under `fit/ytrun/data/` — the PAR is scoped to only permit object names starting with `fit/`, confirmed against `we-gym-with-w`'s own `PFX = "fit/"` constant. One JSON file per day (`fit/ytrun/data/<date>.json`), full overwrite each time (not append), plus a maintained `index.json` listing which dates exist — same convention as `screentime/push_data.py`.
 
-- Manual only — no scheduled/background sync. iOS background tasks don't run on a reliable clock, so a button is simpler and more predictable than approximating "every hour."
-- On sync: resolves any missing video titles via YouTube's public oEmbed endpoint (no API key/quota, and reliable — unlike the Shorts/channel-name JS scraping elsewhere), caches results locally so they're not re-fetched, then re-uploads every calendar day that has activity since the last successful sync (always a full day overwrite, so nothing needs per-segment sync-state tracking).
+- **Implicit, foreground-triggered** — `CloudSyncService` is owned by `ContentView` and shared via `.environmentObject`, and `sync(modelContext:)` is fired silently from both `ContentView.onAppear` (app opened) and `YouTubeView.onAppear` (Watch YouTube tapped); a manual "Sync to Cloud" button remains on the Daily History screen too, sharing the same instance/state. Deliberately still not an OS-scheduled *background* sync — iOS background tasks don't run on a reliable clock — but "whenever the app is actually open" is reliable, and covers the two moments this app is normally opened for anyway.
+- `sync()` no-ops if already in flight, so firing it from two `onAppear`s back-to-back (open app → tap Watch YouTube) is safe.
+- Catch-up is automatic, not a separate feature: `daysNeedingSync` re-pushes every calendar day with activity on/after `lastSyncAt` (tracked in UserDefaults), so a day missed because the app wasn't opened gets picked up in full on the next sync, with no separate "pending" list to maintain.
+- On sync: resolves any missing video titles via YouTube's public oEmbed endpoint (no API key/quota, and reliable — unlike the Shorts/channel-name JS scraping elsewhere), caches results locally so they're not re-fetched, then re-uploads every calendar day that has activity since the last successful sync (always a full day overwrite, so nothing needs per-segment sync-state tracking). Also pushes the channel-scrape debug log (see Daily History) as a best-effort side effect.
 - Analytics/AI processing deliberately happens OUTSIDE this app, in a separate Python batch project on the user's Mac — reading from the same OCI bucket, running on its own schedule. Keeps API keys/prompts out of the shipped app and iterable without a rebuild. Reading the analysis result back into an in-app dashboard, and any "knowledge base candidate" flagging, are explicitly deferred until that batch pipeline actually produces something.
 
 ---

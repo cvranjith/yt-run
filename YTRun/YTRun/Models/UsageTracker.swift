@@ -59,6 +59,13 @@ final class UsageTracker: ObservableObject {
 
     private var lastResetDayStart: Date
 
+    // Sub-second carry for weighted ticks (see `recordTick`) — e.g. at a
+    // 50% rate, two real-second ticks are needed before a whole counted
+    // second gets added to the totals. Intentionally not persisted:
+    // losing under a second of fractional progress on app relaunch isn't
+    // worth the complexity for a self-discipline tool.
+    private var pendingWeightedSeconds: Double = 0
+
     init() {
         let defaults = UserDefaults.standard
         self.todayUsedSeconds = defaults.integer(forKey: Keys.todayUsedSeconds)
@@ -115,21 +122,34 @@ final class UsageTracker: ObservableObject {
 
     // MARK: - Recording usage
 
-    // Called once per second while a video is actually playing.
-    func recordTick(bingeLimitMinutes: Int, cooldownMinutes: Int, bingeResetAfterMinutes: Int) {
+    // Called once per second while a video is actually playing. `weight`
+    // is how much of that real second counts toward the daily/binge
+    // totals — 1.0 for foreground viewing, lower for background
+    // listen/car (see `AppSettings.listenRatePercent`/`carRatePercent`).
+    // Sub-1-second weighted amounts accumulate in `pendingWeightedSeconds`
+    // until they cross a whole second, rather than being dropped.
+    func recordTick(weight: Double, bingeLimitMinutes: Int, cooldownMinutes: Int, bingeResetAfterMinutes: Int) {
         resetIfNewDay()
         refreshBingeState(bingeResetAfterMinutes: bingeResetAfterMinutes)
         guard !isInCooldown else { return }
 
-        todayUsedSeconds += 1
-        UserDefaults.standard.set(todayUsedSeconds, forKey: Keys.todayUsedSeconds)
-
-        bingeSecondsUsed += 1
-        UserDefaults.standard.set(bingeSecondsUsed, forKey: Keys.bingeSecondsUsed)
-
+        // Real activity happened this tick regardless of weight, so the
+        // inactivity clock for binge-reset should reflect it even if it
+        // didn't cross a whole counted second yet.
         let now = Date()
         lastPlaybackAt = now
         UserDefaults.standard.set(now, forKey: Keys.lastPlaybackAt)
+
+        pendingWeightedSeconds += weight
+        let wholeSeconds = Int(pendingWeightedSeconds)
+        guard wholeSeconds > 0 else { return }
+        pendingWeightedSeconds -= Double(wholeSeconds)
+
+        todayUsedSeconds += wholeSeconds
+        UserDefaults.standard.set(todayUsedSeconds, forKey: Keys.todayUsedSeconds)
+
+        bingeSecondsUsed += wholeSeconds
+        UserDefaults.standard.set(bingeSecondsUsed, forKey: Keys.bingeSecondsUsed)
 
         if bingeSecondsUsed >= bingeLimitMinutes * 60 {
             let endsAt = now.addingTimeInterval(TimeInterval(cooldownMinutes * 60))
@@ -222,6 +242,7 @@ final class UsageTracker: ObservableObject {
         bingeSecondsUsed = 0
         cooldownEndsAt = nil
         lastPlaybackAt = nil
+        pendingWeightedSeconds = 0
         UserDefaults.standard.set(0, forKey: Keys.todayUsedSeconds)
         UserDefaults.standard.set(0, forKey: Keys.bonusSecondsToday)
         UserDefaults.standard.set(0, forKey: Keys.bingeSecondsUsed)
@@ -241,6 +262,7 @@ final class UsageTracker: ObservableObject {
         bingeSecondsUsed = 0
         cooldownEndsAt = nil
         lastPlaybackAt = nil
+        pendingWeightedSeconds = 0
         UserDefaults.standard.set(0, forKey: Keys.todayUsedSeconds)
         UserDefaults.standard.set(0, forKey: Keys.bonusSecondsToday)
         UserDefaults.standard.set(0, forKey: Keys.bingeSecondsUsed)
