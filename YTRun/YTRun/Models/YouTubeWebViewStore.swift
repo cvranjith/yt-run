@@ -70,6 +70,18 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
 
+        // Make YouTube's fullscreen button use the DOM Fullscreen API
+        // (fullscreening the player *container* div) instead of iOS's
+        // native `<video>` fullscreen. YouTube renders captions/CC as its
+        // own HTML overlay on top of the video, not as native <video> text
+        // tracks — so when iOS takes just the raw <video> element
+        // fullscreen, that caption overlay is left behind and CC vanishes.
+        // Element fullscreen keeps the whole player DOM (overlay included)
+        // on screen, so captions stay visible in fullscreen. iOS 15.4+.
+        if #available(iOS 15.4, *) {
+            configuration.preferences.isElementFullscreenEnabled = true
+        }
+
         // Runs before any of YouTube's own scripts (`.atDocumentStart`).
         // Mobile YouTube pauses its own video when it thinks the tab is
         // hidden (via the Page Visibility API) — which is exactly what
