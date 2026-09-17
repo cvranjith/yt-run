@@ -34,6 +34,7 @@ final class AppSettings: ObservableObject {
         static let aiGatewayURI = "aiGatewayURI"
         static let aiGatewayClientID = "aiGatewayClientID"
         static let aiGatewayClientSecret = "aiGatewayClientSecret"
+        static let chatGPTShortcutName = "chatGPTShortcutName"
     }
 
     private enum Defaults {
@@ -57,6 +58,7 @@ final class AppSettings: ObservableObject {
         // 100% and isn't configurable.
         static let listenRatePercent = 50
         static let carRatePercent = 10
+        static let chatGPTShortcutName = "YTRun Summarize"
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -178,6 +180,13 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(aiGatewayClientSecret, forKey: Keys.aiGatewayClientSecret) }
     }
 
+    // Name of the Shortcut the experimental "Summarize via ChatGPT App"
+    // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
+    // what the Shortcut is named in the Shortcuts app.
+    @Published var chatGPTShortcutName: String {
+        didSet { UserDefaults.standard.set(chatGPTShortcutName, forKey: Keys.chatGPTShortcutName) }
+    }
+
     init() {
         let defaults = UserDefaults.standard
 
@@ -211,5 +220,6 @@ final class AppSettings: ObservableObject {
         self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? ""
         self.aiGatewayClientID = defaults.string(forKey: Keys.aiGatewayClientID) ?? ""
         self.aiGatewayClientSecret = defaults.string(forKey: Keys.aiGatewayClientSecret) ?? ""
+        self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
     }
 }

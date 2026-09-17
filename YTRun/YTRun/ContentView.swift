@@ -45,6 +45,11 @@ struct ContentView: View {
     // owned here (not inside SummaryView) for the same reason as
     // `downloadManager`.
     @StateObject private var aiGatewayClient = AIGatewayClient()
+    // Peer alternate summarizer via the ChatGPT app (see
+    // ChatGPTShortcutBridge) — owned here so it can receive the
+    // app-wide `.onOpenURL` callback below regardless of which screen
+    // is on top when the Shortcuts app hands control back.
+    @StateObject private var chatGPTBridge = ChatGPTShortcutBridge()
 
     @Environment(\.modelContext) private var modelContext
 
@@ -96,6 +101,10 @@ struct ContentView: View {
         .environmentObject(cloudSync)
         .environmentObject(downloadManager)
         .environmentObject(aiGatewayClient)
+        .environmentObject(chatGPTBridge)
+        .onOpenURL { url in
+            chatGPTBridge.handle(url: url)
+        }
         .onAppear {
             // Lets the Lock Screen / Control Center play button respect
             // the app's own lock state — without this, tapping play there

@@ -43,6 +43,9 @@ struct YouTubeView: View {
     @State private var captionsViewerID = UUID()
     @State private var isShowingSummaryViewer = false
     @State private var summaryViewerID = UUID()
+    // Peer alternate summarizer via the ChatGPT app — see ChatGPTSummaryDebugView.
+    @State private var isShowingChatGPTSummary = false
+    @State private var chatGPTSummaryViewerID = UUID()
     // Whether the current video has any captions at all — gates "View
     // Captions"/"Summarize" so tapping either doesn't send a request
     // (to YouTube, or all the way to the AI Gateway) that's guaranteed
@@ -159,6 +162,10 @@ struct YouTubeView: View {
         .sheet(isPresented: $isShowingSummaryViewer) {
             SummaryView()
                 .id(summaryViewerID)
+        }
+        .sheet(isPresented: $isShowingChatGPTSummary) {
+            ChatGPTSummaryDebugView()
+                .id(chatGPTSummaryViewerID)
         }
         .alert("Download", isPresented: Binding(
             get: { downloadResultMessage != nil },
@@ -321,6 +328,17 @@ struct YouTubeView: View {
                     isShowingSummaryViewer = true
                 } label: {
                     Label("Summarize", systemImage: "text.bubble")
+                }
+                .disabled(!captionsAvailable)
+
+                // A peer path via the user's own ChatGPT app + a
+                // Shortcut instead of ai-gateway; see
+                // ChatGPTSummaryDebugView / chatgpt-shortcut-setup.md.
+                Button {
+                    chatGPTSummaryViewerID = UUID()
+                    isShowingChatGPTSummary = true
+                } label: {
+                    Label("Summarize via ChatGPT", systemImage: "sparkles")
                 }
                 .disabled(!captionsAvailable)
             } label: {
@@ -490,4 +508,5 @@ struct YouTubeView: View {
     .environmentObject(CloudSyncService())
     .environmentObject(DownloadManager())
     .environmentObject(AIGatewayClient())
+    .environmentObject(ChatGPTShortcutBridge())
 }

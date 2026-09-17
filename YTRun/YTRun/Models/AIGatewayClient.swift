@@ -57,17 +57,22 @@ final class AIGatewayClient: ObservableObject {
     private var cachedTokenExpiry: Date?
     // Summaries are deterministic enough per (video, length) that
     // there's no reason to hit the gateway again for one already
-    // fetched this app session — closing and reopening the Summary
-    // sheet for the same video, or switching the length picker back to
-    // one already seen, should just come from here. In memory only
-    // (same lifetime as the token cache above), not persisted to disk.
-    private var summaryCache: [String: String] = [:]
+    // fetched — closing and reopening the Summary sheet for the same
+    // video, or switching the length picker back to one already seen,
+    // should just come from here. Deliberately scoped to only the
+    // *current* video (not a growing history of every video visited
+    // this session) — navigating to another video and back should
+    // just re-summarize, which avoids needing any cache eviction for
+    // what's a lightweight, personal-use feature.
+    private var cachedVideoID: String?
+    private var cachedSummaries: [AIGatewaySummaryLength: String] = [:]
 
     // Synchronous, no network — lets a view check "do we already have
     // this?" (e.g. on appear, or right when the length picker changes)
     // without that check itself counting as "asking the server."
     func cachedSummary(videoID: String, length: AIGatewaySummaryLength) -> String? {
-        summaryCache[Self.cacheKey(videoID: videoID, length: length)]
+        guard videoID == cachedVideoID else { return nil }
+        return cachedSummaries[length]
     }
 
     func summarize(
@@ -75,8 +80,7 @@ final class AIGatewayClient: ObservableObject {
         length: AIGatewaySummaryLength,
         settings: AppSettings
     ) async -> Result<String, AIGatewayError> {
-        let cacheKey = Self.cacheKey(videoID: videoID, length: length)
-        if let cached = summaryCache[cacheKey] {
+        if let cached = cachedSummary(videoID: videoID, length: length) {
             return .success(cached)
         }
 
@@ -130,7 +134,11 @@ final class AIGatewayClient: ObservableObject {
         guard let result = json["result"] as? [String: Any], let summary = result["summary"] as? String else {
             return .failure(.decoding)
         }
-        summaryCache[cacheKey] = summary
+        if videoID != cachedVideoID {
+            cachedVideoID = videoID
+            cachedSummaries = [:]
+        }
+        cachedSummaries[length] = summary
         return .success(summary)
     }
 
@@ -189,10 +197,6 @@ final class AIGatewayClient: ObservableObject {
         // it exactly at the wire.
         cachedTokenExpiry = Date().addingTimeInterval(expiresIn - 30)
         return .success(accessToken)
-    }
-
-    private static func cacheKey(videoID: String, length: AIGatewaySummaryLength) -> String {
-        "\(videoID)|\(length.rawValue)"
     }
 
     private static func configError(_ settings: AppSettings) -> AIGatewayError {
