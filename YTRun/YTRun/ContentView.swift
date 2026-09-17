@@ -35,6 +35,11 @@ struct ContentView: View {
     // app-foreground events like this screen and the YouTube screen
     // appearing, sharing the same in-flight/last-synced state either way.
     @StateObject private var cloudSync = CloudSyncService()
+    // Owned here (like `webViewStore`) so `isDownloading` — and thus an
+    // in-flight download itself — survives navigating away from and back
+    // to the YouTube screen, rather than resetting with a fresh instance
+    // each time that screen appears.
+    @StateObject private var downloadManager = DownloadManager()
 
     @Environment(\.modelContext) private var modelContext
 
@@ -66,6 +71,9 @@ struct ContentView: View {
                         MenuTile(title: "Run History", systemImage: "map.fill", color: .green) {
                             RunHistoryView()
                         }
+                        MenuTile(title: "Downloads", systemImage: "arrow.down.circle.fill", color: .blue) {
+                            DownloadsView()
+                        }
                     }
 
                     MenuTile(title: "Settings", systemImage: "gearshape.fill", color: .gray, fullWidth: true) {
@@ -81,6 +89,7 @@ struct ContentView: View {
         .environmentObject(webViewStore)
         .environmentObject(runTracker)
         .environmentObject(cloudSync)
+        .environmentObject(downloadManager)
         .onAppear {
             // Lets the Lock Screen / Control Center play button respect
             // the app's own lock state — without this, tapping play there
@@ -93,6 +102,9 @@ struct ContentView: View {
             // Lets the YouTube screen respect Settings' "Restrict Shorts"
             // toggle — see `YouTubeWebViewStore`.
             webViewStore.isShortsRestricted = { [settings] in settings.restrictShorts }
+            // Lets the YouTube screen respect its own "Listen Mode"
+            // toggle — see `YouTubeWebViewStore`.
+            webViewStore.isListenModeEnabled = { [settings] in settings.listenModeEnabled }
 
             // Implicit sync trigger #1: the app being opened at all. Runs
             // silently in the background — `cloudSync` already tracks

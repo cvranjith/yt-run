@@ -113,7 +113,7 @@ struct SettingsView: View {
             Section {
                 Toggle("Restrict Shorts", isOn: $settings.restrictShorts)
             } footer: {
-                Text("When on, the YouTube screen redirects away from Shorts back to the home feed. Best-effort — YouTube's Shorts feed can scroll between clips without a page reload, so there may be a brief flash before it redirects.")
+                Text("When on, Shorts thumbnails and shelves are hidden everywhere in the YouTube screen (home feed, search, the Shorts tab) so they can't even be previewed, and opening a Shorts link directly redirects back to the home feed. Best-effort — YouTube's markup can change, and the Shorts feed can scroll between clips without a page reload, so there may be a brief flash before a direct link redirects.")
             }
 
             Section {

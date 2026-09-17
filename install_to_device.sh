@@ -20,7 +20,14 @@ cd "$REPO_DIR"
 git pull origin main
 
 echo "==> Finding connected device"
-DEVICE_ID=$(xcrun devicectl list devices 2>/dev/null | awk '/connected/{print $3; exit}')
+# Table output's "Identifier" column is annotated (e.g. "<uuid> (UDID)"), which
+# breaks whitespace-based parsing. Use --json-output instead and pull the real
+# UDID from properties.hardware.udid - that's what xcodebuild's -destination
+# expects (the top-level "identifier" field is a different CoreDevice UUID).
+DEVICES_JSON="$(mktemp)"
+trap 'rm -f "$DEVICES_JSON"' EXIT
+xcrun devicectl list devices --json-output "$DEVICES_JSON" --omit-deprecated-fields-in-json >/dev/null
+DEVICE_ID=$(jq -r '[.result.devices[] | select(.properties.connection.state == "connected")][0].properties.hardware.udid // empty' "$DEVICES_JSON")
 if [ -z "$DEVICE_ID" ]; then
   echo "No connected device found. Plug in your iPhone via USB and unlock it." >&2
   exit 1
@@ -39,13 +46,28 @@ rm -f ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision 2>/dev/nul
 rm -f ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobileprovision 2>/dev/null || true
 
 echo "==> Building for device (no Simulator involved)"
+# With the profile cache wiped above and two targets needing fresh profiles
+# (YTRun app + YTRun.RunActivity extension), -allowProvisioningUpdates
+# sometimes races: a packaging step reads a profile UUID just as it's being
+# superseded by the other target's resolution, and fails with "Build input
+# file cannot be found" for a .mobileprovision that never ends up on disk.
+# The actual profile download/registration still succeeds, so a second
+# attempt (profiles now cached) reliably works - retry once before giving up.
+build_attempt() {
+  xcodebuild build \
+    -project "$PROJECT" \
+    -scheme "$SCHEME" \
+    -destination "id=$DEVICE_ID" \
+    -derivedDataPath "$BUILD_DIR" \
+    -allowProvisioningUpdates
+}
+
 rm -rf "$BUILD_DIR"
-xcodebuild build \
-  -project "$PROJECT" \
-  -scheme "$SCHEME" \
-  -destination "id=$DEVICE_ID" \
-  -derivedDataPath "$BUILD_DIR" \
-  -allowProvisioningUpdates
+if ! build_attempt; then
+  echo "==> Build failed (likely a provisioning-profile resolution race after cache wipe); retrying once" >&2
+  rm -rf "$BUILD_DIR"
+  build_attempt
+fi
 
 APP_PATH=$(find "$BUILD_DIR/Build/Products" -maxdepth 2 -name "*.app" | head -1)
 if [ -z "$APP_PATH" ]; then

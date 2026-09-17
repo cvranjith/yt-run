@@ -14,6 +14,7 @@ struct YouTubeView: View {
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var webViewStore: YouTubeWebViewStore
     @EnvironmentObject var cloudSync: CloudSyncService
+    @EnvironmentObject var downloadManager: DownloadManager
 
     @StateObject private var historyRecorder = WatchHistoryRecorder()
     @Environment(\.modelContext) private var modelContext
@@ -24,6 +25,8 @@ struct YouTubeView: View {
 
     @State private var isShowingURLEntry = false
     @State private var urlInput = ""
+    @State private var downloadResultMessage: String?
+    @State private var debugInfoMessage: String?
 
     private var isLocked: Bool {
         usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
@@ -95,41 +98,97 @@ struct YouTubeView: View {
         // since the page has its own chrome.
         .ignoresSafeArea(edges: .bottom)
         .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                Button {
-                    webViewStore.goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!webViewStore.canGoBack)
-                .accessibilityLabel("Back")
+            // Grouped into one explicit Menu (rather than six separate
+            // ToolbarItems) because six icon-only buttons don't all fit
+            // in the nav bar — iOS silently collapses the overflow into
+            // its own "•••" menu, which turned out to render blank,
+            // unusable rows for icon-only buttons here. An explicit Menu
+            // with text labels sidesteps that entirely, and doubles as a
+            // sensible home for the less frequently used navigation
+            // controls, keeping Listen Mode and Download as standalone,
+            // always-visible, one-tap buttons.
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button {
+                        webViewStore.goBack()
+                    } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .disabled(!webViewStore.canGoBack)
 
-                Button {
-                    webViewStore.goForward()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!webViewStore.canGoForward)
-                .accessibilityLabel("Forward")
+                    Button {
+                        webViewStore.goForward()
+                    } label: {
+                        Label("Forward", systemImage: "chevron.right")
+                    }
+                    .disabled(!webViewStore.canGoForward)
 
-                Button {
-                    webViewStore.reload()
+                    Button {
+                        webViewStore.reload()
+                    } label: {
+                        Label("Reload", systemImage: "arrow.clockwise")
+                    }
+
+                    Button {
+                        isShowingURLEntry = true
+                    } label: {
+                        Label("Open a Link", systemImage: "link.badge.plus")
+                    }
+
+                    // Temporary, while Listen Mode / fullscreen are being
+                    // debugged without live browser access — see
+                    // `YouTubeWebViewStore.fetchDebugInfo()`.
+                    Button {
+                        Task { debugInfoMessage = await webViewStore.fetchDebugInfo() }
+                    } label: {
+                        Label("Debug Info", systemImage: "ladybug")
+                    }
                 } label: {
-                    Image(systemName: "arrow.clockwise")
+                    Image(systemName: "ellipsis.circle")
                 }
-                .accessibilityLabel("Reload — use this if a video gets stuck")
+                .accessibilityLabel("More")
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
-                    isShowingURLEntry = true
+                    settings.listenModeEnabled.toggle()
+                    webViewStore.applyListenMode()
                 } label: {
-                    Image(systemName: "link.badge.plus")
+                    Image(systemName: settings.listenModeEnabled ? "headphones.circle.fill" : "headphones.circle")
                 }
-                .accessibilityLabel("Open a pasted link")
+                .accessibilityLabel(settings.listenModeEnabled ? "Turn off Listen Mode" : "Turn on Listen Mode")
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    Task { await performDownload() }
+                } label: {
+                    if downloadManager.isDownloading {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                }
+                .disabled(downloadManager.isDownloading)
+                .accessibilityLabel(settings.listenModeEnabled ? "Download audio" : "Download video")
             }
         }
         .sheet(isPresented: $isShowingURLEntry) {
             openURLSheet
+        }
+        .alert("Download", isPresented: Binding(
+            get: { downloadResultMessage != nil },
+            set: { if !$0 { downloadResultMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(downloadResultMessage ?? "")
+        }
+        .alert("Debug Info", isPresented: Binding(
+            get: { debugInfoMessage != nil },
+            set: { if !$0 { debugInfoMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(debugInfoMessage ?? "")
         }
         .onAppear {
             // Only load the default page the very first time this screen
@@ -143,6 +202,11 @@ struct YouTubeView: View {
             // actually resume after a previous lock forcibly deactivated
             // the audio session (see `forceStopAudio`).
             webViewStore.reactivateAudioSession()
+            // Re-applies "Restrict Shorts" hiding in case it was toggled
+            // in Settings while this screen wasn't visible — a full page
+            // load isn't guaranteed to happen just from returning here.
+            webViewStore.applyShortsHiding()
+            webViewStore.applyListenMode()
             // Implicit sync trigger #2: opening the YouTube screen
             // itself ("whenever I click watch"). `CloudSyncService.sync`
             // already no-ops if a sync is already in flight, so this is
@@ -245,6 +309,24 @@ struct YouTubeView: View {
         .presentationDetents([.medium])
     }
 
+    // Downloads whatever's currently loaded — audio-only when Listen
+    // Mode is on (matching what you're actually consuming), the full
+    // video otherwise. See `DownloadManager`/`downloadInfoJS` for why
+    // this doesn't work for every video.
+    private func performDownload() async {
+        guard let info = await webViewStore.fetchDownloadInfo() else {
+            downloadResultMessage = DownloadError.noStreamAvailable.message
+            return
+        }
+        let result = await downloadManager.download(info: info, audioOnly: settings.listenModeEnabled)
+        switch result {
+        case .success(let url):
+            downloadResultMessage = "Saved as \(url.lastPathComponent)."
+        case .failure(let error):
+            downloadResultMessage = error.message
+        }
+    }
+
     // Accepts either a bare video ID ("dQw4w9WgXcQ") or a full URL in any
     // of YouTube's link shapes (youtube.com/watch?v=…, youtu.be/…,
     // youtube.com/shorts/…) and turns it into something WKWebView can load.
@@ -275,4 +357,5 @@ struct YouTubeView: View {
     .environmentObject(UsageTracker())
     .environmentObject(YouTubeWebViewStore())
     .environmentObject(CloudSyncService())
+    .environmentObject(DownloadManager())
 }

@@ -27,6 +27,7 @@ final class AppSettings: ObservableObject {
         static let weightKg = "weightKg"
         static let carBluetoothDeviceName = "carBluetoothDeviceName"
         static let restrictShorts = "restrictShorts"
+        static let listenModeEnabled = "listenModeEnabled"
         static let listenRatePercent = "listenRatePercent"
         static let carRatePercent = "carRatePercent"
     }
@@ -110,10 +111,20 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(carBluetoothDeviceName, forKey: Keys.carBluetoothDeviceName) }
     }
 
-    // When on, the YouTube screen redirects away from any Shorts page
-    // (`/shorts/...`) back to the home feed — see `YouTubeWebViewStore`.
+    // When on, Shorts are hidden outright (thumbnails, shelves, the Shorts
+    // tab) so they can't be previewed, and any direct navigation to a
+    // Shorts page (`/shorts/...`) redirects back to the home feed instead
+    // of playing — see `YouTubeWebViewStore`.
     @Published var restrictShorts: Bool {
         didSet { UserDefaults.standard.set(restrictShorts, forKey: Keys.restrictShorts) }
+    }
+
+    // Toggled from the YouTube screen itself (not just Settings) — forces
+    // the lowest video quality and covers the player so no video frames
+    // are visible, while audio keeps playing normally. Persisted so it
+    // carries over between visits, same as every other setting here.
+    @Published var listenModeEnabled: Bool {
+        didSet { UserDefaults.standard.set(listenModeEnabled, forKey: Keys.listenModeEnabled) }
     }
 
     // How much of a real second of background listening counts toward
@@ -156,6 +167,7 @@ final class AppSettings: ObservableObject {
             ?? Defaults.weightKg
         self.carBluetoothDeviceName = defaults.string(forKey: Keys.carBluetoothDeviceName) ?? ""
         self.restrictShorts = defaults.bool(forKey: Keys.restrictShorts)
+        self.listenModeEnabled = defaults.bool(forKey: Keys.listenModeEnabled)
         self.listenRatePercent = defaults.object(forKey: Keys.listenRatePercent) as? Int
             ?? Defaults.listenRatePercent
         self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int
