@@ -28,6 +28,7 @@ final class AppSettings: ObservableObject {
         static let carBluetoothDeviceName = "carBluetoothDeviceName"
         static let restrictShorts = "restrictShorts"
         static let listenModeEnabled = "listenModeEnabled"
+        static let enableSimulateRun = "enableSimulateRun"
         static let listenRatePercent = "listenRatePercent"
         static let carRatePercent = "carRatePercent"
     }
@@ -127,6 +128,19 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(listenModeEnabled, forKey: Keys.listenModeEnabled) }
     }
 
+    // Off by default. When off, the Locked screen's "Simulate Run"
+    // button (which grants the run reward with no actual GPS/distance/
+    // duration check at all) doesn't show at all — see `LockedView`.
+    // The whole point of the app is the running requirement, so an
+    // always-visible one-tap bypass right there on the Locked screen
+    // undermined that; this setting exists for legitimately testing the
+    // reward flow, deliberately requiring a trip to Settings first
+    // rather than being a tap away in the moment you're trying to
+    // resist bypassing the limit.
+    @Published var enableSimulateRun: Bool {
+        didSet { UserDefaults.standard.set(enableSimulateRun, forKey: Keys.enableSimulateRun) }
+    }
+
     // How much of a real second of background listening counts toward
     // the daily/binge totals — see `UsageTracker.recordTick`. 50 means
     // watching in the background costs half as much allowance as
@@ -168,6 +182,7 @@ final class AppSettings: ObservableObject {
         self.carBluetoothDeviceName = defaults.string(forKey: Keys.carBluetoothDeviceName) ?? ""
         self.restrictShorts = defaults.bool(forKey: Keys.restrictShorts)
         self.listenModeEnabled = defaults.bool(forKey: Keys.listenModeEnabled)
+        self.enableSimulateRun = defaults.bool(forKey: Keys.enableSimulateRun)
         self.listenRatePercent = defaults.object(forKey: Keys.listenRatePercent) as? Int
             ?? Defaults.listenRatePercent
         self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int

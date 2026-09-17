@@ -27,9 +27,19 @@ echo "==> Finding connected device"
 DEVICES_JSON="$(mktemp)"
 trap 'rm -f "$DEVICES_JSON"' EXIT
 xcrun devicectl list devices --json-output "$DEVICES_JSON" --omit-deprecated-fields-in-json >/dev/null
-DEVICE_ID=$(jq -r '[.result.devices[] | select(.properties.connection.state == "connected")][0].properties.hardware.udid // empty' "$DEVICES_JSON")
+# Filters on `pairingState` ("paired"), not `connection.state`
+# ("connected"/"disconnected"/etc.) — for a Wi-Fi-paired device, the
+# latter is just a snapshot of whatever the tunnel happened to be doing
+# the moment `list devices` ran, and idles to "disconnected" whenever
+# nothing has used it in a while. `list devices` never re-establishes it
+# either. `pairingState`, unlike that, reflects whether this Mac has a
+# valid pairing record for the device at all, which is the thing that
+# actually matters here: any *targeted* devicectl operation against a
+# paired device's UDID (an actual build/install, same as the one below)
+# transparently re-establishes the tunnel on demand.
+DEVICE_ID=$(jq -r '[.result.devices[] | select(.properties.connection.pairingState == "paired")][0].properties.hardware.udid // empty' "$DEVICES_JSON")
 if [ -z "$DEVICE_ID" ]; then
-  echo "No connected device found. Plug in your iPhone via USB and unlock it." >&2
+  echo "No paired device found. Plug in your iPhone via USB and unlock it, or pair it once over USB for future Wi-Fi use." >&2
   exit 1
 fi
 echo "Using device: $DEVICE_ID"

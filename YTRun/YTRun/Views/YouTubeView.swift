@@ -18,6 +18,11 @@ struct YouTubeView: View {
 
     @StateObject private var historyRecorder = WatchHistoryRecorder()
     @Environment(\.modelContext) private var modelContext
+    // Drives the custom leading-toolbar "home" button — replaces the
+    // default back button (hidden via `.navigationBarBackButtonHidden`)
+    // so it can't be confused with the web page's own Back button, which
+    // now sits right next to it.
+    @Environment(\.dismiss) private var dismiss
     // Reliable watch-vs-listen signal: `.active` means the app is
     // foregrounded (screen on, actually looking at it); anything else
     // (locked, backgrounded) means only audio is being consumed.
@@ -27,6 +32,14 @@ struct YouTubeView: View {
     @State private var urlInput = ""
     @State private var downloadResultMessage: String?
     @State private var debugInfoMessage: String?
+    @State private var isShowingCaptionsViewer = false
+    // Regenerated each time the sheet is opened (see the button below)
+    // and applied via `.id(...)` — without a changing identity here,
+    // SwiftUI can treat repeated presentations of the same sheet content
+    // as continuing the *same* view instance rather than a fresh one,
+    // silently keeping its old @State (including a stale error from a
+    // previous attempt) and never re-running its `.task`.
+    @State private var captionsViewerID = UUID()
 
     private var isLocked: Bool {
         usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
@@ -39,7 +52,13 @@ struct YouTubeView: View {
                 LockedView()
             } else {
                 VStack(spacing: 0) {
-                    statusBar
+                    // Hidden in DIY fullscreen (see `YouTubeWebViewStore
+                    // .isCustomFullscreen`) so neither eats into the
+                    // expanded player's space.
+                    if !webViewStore.isCustomFullscreen {
+                        controlBar
+                        statusBar
+                    }
                     YouTubeWebView(store: webViewStore)
                 }
                 // A repeating timer, not tied to WKWebView at all — every
@@ -92,87 +111,36 @@ struct YouTubeView: View {
                 }
             }
         }
-        .navigationTitle("YouTube")
+        // No native title/toolbar content at all — see `controlBar`.
+        // SwiftUI's native `ToolbarItem`/`ToolbarItemGroup` rendering hit
+        // a hard, reproducible ceiling on this device: six-ish icon-only
+        // items (regardless of how they were split between leading/
+        // trailing, or grouped vs. individual `ToolbarItem`s) reliably
+        // render broken — some buttons silently vanish, replaced by a
+        // second, non-functional "•••"-looking control, confirmed twice
+        // over with on-device screenshots after two different attempts
+        // at restructuring the *native* toolbar. A plain custom view
+        // below the nav bar sidesteps the native toolbar entirely, using
+        // the exact same "just a row of buttons in the body" technique
+        // `statusBar` already uses without any such issue.
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
         // Let the web content run under the status bar/notch area too,
-        // since the page has its own chrome.
-        .ignoresSafeArea(edges: .bottom)
-        .toolbar {
-            // Grouped into one explicit Menu (rather than six separate
-            // ToolbarItems) because six icon-only buttons don't all fit
-            // in the nav bar — iOS silently collapses the overflow into
-            // its own "•••" menu, which turned out to render blank,
-            // unusable rows for icon-only buttons here. An explicit Menu
-            // with text labels sidesteps that entirely, and doubles as a
-            // sensible home for the less frequently used navigation
-            // controls, keeping Listen Mode and Download as standalone,
-            // always-visible, one-tap buttons.
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button {
-                        webViewStore.goBack()
-                    } label: {
-                        Label("Back", systemImage: "chevron.left")
-                    }
-                    .disabled(!webViewStore.canGoBack)
-
-                    Button {
-                        webViewStore.goForward()
-                    } label: {
-                        Label("Forward", systemImage: "chevron.right")
-                    }
-                    .disabled(!webViewStore.canGoForward)
-
-                    Button {
-                        webViewStore.reload()
-                    } label: {
-                        Label("Reload", systemImage: "arrow.clockwise")
-                    }
-
-                    Button {
-                        isShowingURLEntry = true
-                    } label: {
-                        Label("Open a Link", systemImage: "link.badge.plus")
-                    }
-
-                    // Temporary, while Listen Mode / fullscreen are being
-                    // debugged without live browser access — see
-                    // `YouTubeWebViewStore.fetchDebugInfo()`.
-                    Button {
-                        Task { debugInfoMessage = await webViewStore.fetchDebugInfo() }
-                    } label: {
-                        Label("Debug Info", systemImage: "ladybug")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("More")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    settings.listenModeEnabled.toggle()
-                    webViewStore.applyListenMode()
-                } label: {
-                    Image(systemName: settings.listenModeEnabled ? "headphones.circle.fill" : "headphones.circle")
-                }
-                .accessibilityLabel(settings.listenModeEnabled ? "Turn off Listen Mode" : "Turn on Listen Mode")
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button {
-                    Task { await performDownload() }
-                } label: {
-                    if downloadManager.isDownloading {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "arrow.down.circle")
-                    }
-                }
-                .disabled(downloadManager.isDownloading)
-                .accessibilityLabel(settings.listenModeEnabled ? "Download audio" : "Download video")
-            }
-        }
+        // since the page has its own chrome. In DIY fullscreen, ignore
+        // every edge instead of just the bottom, and hide the system
+        // status bar too — the expanded player (see
+        // `forceElementFullscreenJS`) should fill the whole screen with
+        // nothing else competing for space.
+        .ignoresSafeArea(edges: webViewStore.isCustomFullscreen ? .all : .bottom)
+        .statusBarHidden(webViewStore.isCustomFullscreen)
         .sheet(isPresented: $isShowingURLEntry) {
             openURLSheet
+        }
+        .sheet(isPresented: $isShowingCaptionsViewer) {
+            CaptionsViewerView()
+                .id(captionsViewerID)
         }
         .alert("Download", isPresented: Binding(
             get: { downloadResultMessage != nil },
@@ -217,6 +185,11 @@ struct YouTubeView: View {
             // Covers fully leaving this screen (e.g. tapping back to Home).
             webViewStore.forceStopAudio()
             historyRecorder.flush(modelContext: modelContext)
+            // Safety net: if DIY fullscreen was still active, exit it now
+            // rather than leaving the nav bar hidden the next time this
+            // screen appears (a plain `didFinish` reset only covers an
+            // actual page navigation, not leaving the screen itself).
+            webViewStore.exitCustomFullscreenIfNeeded()
         }
         .onChange(of: isLocked) { _, locked in
             // Covers becoming locked *while still on this screen* (hitting
@@ -234,6 +207,106 @@ struct YouTubeView: View {
                 webViewStore.reactivateAudioSession()
             }
         }
+    }
+
+    // Replaces the native navigation bar's title/toolbar entirely — see
+    // the comment on `.toolbar(.hidden, for: .navigationBar)` above for
+    // why. Home (app navigation, distinct from the web page's own Back
+    // right next to it) / Back / Reload on the left; a "•••" menu for
+    // the less-used web controls, then Listen Mode / Download as
+    // one-tap buttons, on the right.
+    private var controlBar: some View {
+        HStack(spacing: 18) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "house")
+            }
+            .accessibilityLabel("Home")
+
+            Button {
+                webViewStore.goBack()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .disabled(!webViewStore.canGoBack)
+            .accessibilityLabel("Back")
+
+            Button {
+                webViewStore.reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .accessibilityLabel("Reload — use this if a video gets stuck")
+
+            Spacer()
+
+            Menu {
+                Button {
+                    webViewStore.goForward()
+                } label: {
+                    Label("Forward", systemImage: "chevron.right")
+                }
+                .disabled(!webViewStore.canGoForward)
+
+                Button {
+                    isShowingURLEntry = true
+                } label: {
+                    Label("Open a Link", systemImage: "link.badge.plus")
+                }
+
+                // Temporary, while Listen Mode / fullscreen are being
+                // debugged without live browser access — see
+                // `YouTubeWebViewStore.fetchDebugInfo()`.
+                Button {
+                    Task { debugInfoMessage = await webViewStore.fetchDebugInfo() }
+                } label: {
+                    Label("Debug Info", systemImage: "ladybug")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("More")
+
+            Button {
+                settings.listenModeEnabled.toggle()
+                webViewStore.applyListenMode()
+            } label: {
+                Image(systemName: settings.listenModeEnabled ? "headphones.circle.fill" : "headphones.circle")
+            }
+            .accessibilityLabel(settings.listenModeEnabled ? "Turn off Listen Mode" : "Turn on Listen Mode")
+
+            Menu {
+                Button {
+                    Task { await performDownload() }
+                } label: {
+                    Label(
+                        settings.listenModeEnabled ? "Download Audio" : "Download Video",
+                        systemImage: "arrow.down.circle"
+                    )
+                }
+
+                Button {
+                    captionsViewerID = UUID()
+                    isShowingCaptionsViewer = true
+                } label: {
+                    Label("View Captions", systemImage: "captions.bubble")
+                }
+            } label: {
+                if downloadManager.isDownloading {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.down.circle")
+                }
+            }
+            .disabled(downloadManager.isDownloading)
+            .accessibilityLabel("Download")
+        }
+        .font(.title3)
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
+        .background(.bar)
     }
 
     // Single-line bar above the web content. Two separate labels (each

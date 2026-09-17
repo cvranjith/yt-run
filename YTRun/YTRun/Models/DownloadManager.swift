@@ -18,22 +18,50 @@ struct DownloadInfo {
     let audioURL: URL?
 }
 
+// One caption line, already stripped of the raw JSON shape it arrived
+// in — used both to render the on-screen transcript and, if the user
+// chooses to save it, to build a .txt or .srt file from the exact same
+// fetched data (no re-fetching just to save what's already on screen).
+struct CaptionEvent {
+    let startMs: Int?
+    let durationMs: Int?
+    let text: String
+}
+
+enum CaptionFormat {
+    case text
+    case srt
+
+    var fileExtension: String {
+        switch self {
+        case .text: return "txt"
+        case .srt: return "srt"
+        }
+    }
+}
+
 enum DownloadError: Error {
     case alreadyInProgress
     case noStreamAvailable
+    case noCaptionsAvailable
     case network(Error)
     case fileSystem(Error)
+    case emptyOrTruncated
 
     var message: String {
         switch self {
         case .alreadyInProgress:
             return "A download is already in progress."
         case .noStreamAvailable:
-            return "This video's stream isn't available for direct download — YouTube may have protected it, or (for audio) it may need a few seconds of playback first before its stream URL is known."
+            return "This video's stream isn't available for direct download — YouTube may have protected it."
+        case .noCaptionsAvailable:
+            return "No usable captions were found for this video."
         case .network(let error):
             return "Download failed: \(error.localizedDescription)"
         case .fileSystem(let error):
             return "Couldn't save the file: \(error.localizedDescription)"
+        case .emptyOrTruncated:
+            return "The download came back empty or incomplete, so it wasn't saved. This can happen if YouTube's stream link expired mid-download — try again."
         }
     }
 }
@@ -94,6 +122,22 @@ final class DownloadManager: ObservableObject {
             return .failure(.network(error))
         }
 
+        // Guards against a download that "succeeds" (a 200/206 response,
+        // no thrown error) but produces an unusably small file — seen in
+        // practice with an earlier, since-removed sniffed-URL fallback
+        // that sometimes pointed at just a small chunk of the track
+        // rather than the whole thing. Any real audio/video track is
+        // comfortably larger than this even at the lowest bitrates,
+        // whereas an empty or single-fragment response is not — so
+        // rather than silently reporting success on a file that won't
+        // actually play, this fails clearly instead.
+        let minimumValidBytes: Int64 = 32 * 1024
+        let downloadedSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? nil
+        guard let size = downloadedSize, size >= minimumValidBytes else {
+            try? FileManager.default.removeItem(at: tempURL)
+            return .failure(.emptyOrTruncated)
+        }
+
         let ext = Self.fileExtension(mimeType: response.mimeType, audioOnly: audioOnly)
         let destinationURL = Self.uniqueDestinationURL(title: info.title, extension: ext)
         do {
@@ -102,6 +146,234 @@ final class DownloadManager: ObservableObject {
             return .failure(.fileSystem(error))
         }
         return .success(destinationURL)
+    }
+
+    // Fetches the video's captions for on-screen viewing — saving to a
+    // file is a separate, later step (`saveCaptionFile`) using the same
+    // events, so viewing never requires committing to a save.
+    //
+    // Two earlier approaches were dead ends, both confirmed with hard
+    // evidence rather than assumption:
+    // 1. Reading `ytInitialPlayerResponse.captions` out of the already-
+    //    loaded page — genuinely `null` for some videos even when CC is
+    //    visibly available, apparently only populated once the user
+    //    actually toggles CC on in the player.
+    // 2. The legacy `timedtext?type=list` discovery endpoint — confirmed
+    //    dead server-side for *any* caller via a plain `curl` with no
+    //    session at all (HTTP 200, `content-length: 0`, even for videos
+    //    that definitely have captions).
+    //
+    // What actually works (verified the same way, via `curl`, before
+    // implementing): request a *fresh* player response from YouTube's
+    // internal `/youtubei/v1/player` API using the ANDROID client
+    // context — the same technique the `youtube-transcript-api` Python
+    // library uses. This is a stateless API call (no cookies/session
+    // needed) that returns full caption track data, including a
+    // baseUrl already signed and ready to fetch directly — unlike the
+    // dead discovery endpoint, that per-track URL still works fine.
+    // Entirely native networking now; no WebView/JS bridging involved.
+    func fetchCaptionEvents(videoID: String) async -> Result<[CaptionEvent], DownloadError> {
+        guard let apiKey = await Self.fetchInnertubeAPIKey(videoID: videoID) else {
+            return .failure(.noCaptionsAvailable)
+        }
+        guard let tracks = await Self.fetchCaptionTracks(videoID: videoID, apiKey: apiKey),
+              let track = Self.bestTrack(from: tracks) else {
+            return .failure(.noCaptionsAvailable)
+        }
+
+        let data: Data
+        do {
+            (data, _) = try await URLSession.shared.data(from: Self.withJSON3Format(track.baseURL))
+        } catch {
+            return .failure(.network(error))
+        }
+
+        guard let transcript = try? JSONDecoder().decode(CaptionJSON3.self, from: data),
+              let rawEvents = transcript.events else {
+            return .failure(.noCaptionsAvailable)
+        }
+
+        let events: [CaptionEvent] = rawEvents.compactMap { event in
+            guard let segs = event.segs else { return nil }
+            let text = segs.compactMap { $0.utf8 }.joined()
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            return CaptionEvent(startMs: event.tStartMs, durationMs: event.dDurationMs, text: text)
+        }
+        guard !events.isEmpty else { return .failure(.noCaptionsAvailable) }
+        return .success(events)
+    }
+
+    // Writes already-fetched caption events (from `fetchCaptionEvents`)
+    // to a file — synchronous and network-free, since there's nothing
+    // left to fetch at this point.
+    func saveCaptionFile(events: [CaptionEvent], title: String, format: CaptionFormat) -> Result<URL, DownloadError> {
+        let content = format == .text ? Self.plainText(from: events) : Self.srt(from: events)
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failure(.noCaptionsAvailable)
+        }
+
+        let destinationURL = Self.uniqueDestinationURL(title: "\(title) captions", extension: format.fileExtension)
+        do {
+            try content.write(to: destinationURL, atomically: true, encoding: .utf8)
+        } catch {
+            return .failure(.fileSystem(error))
+        }
+        return .success(destinationURL)
+    }
+
+    static func plainText(from events: [CaptionEvent]) -> String {
+        events.map { $0.text }.joined(separator: "\n")
+    }
+
+    static func srt(from events: [CaptionEvent]) -> String {
+        var blocks: [String] = []
+        var index = 1
+        for event in events {
+            guard let start = event.startMs, let duration = event.durationMs else { continue }
+            blocks.append("\(index)\n\(srtTimestamp(ms: start)) --> \(srtTimestamp(ms: start + duration))\n\(event.text)")
+            index += 1
+        }
+        return blocks.joined(separator: "\n\n")
+    }
+
+    private static func srtTimestamp(ms: Int) -> String {
+        let totalSeconds = ms / 1000
+        let milliseconds = ms % 1000
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%02d:%02d:%02d,%03d", hours, minutes, seconds, milliseconds)
+    }
+
+    // MARK: - Caption track discovery (YouTube's "timedtext" endpoints)
+
+    // Matches the shape of `timedtext?...&fmt=json3` — a flat list of
+    // "events", each optionally carrying one or more text segments and
+    // (for actual caption lines, as opposed to pure positioning events)
+    // a start time + duration in milliseconds.
+    private struct CaptionJSON3: Decodable {
+        struct Event: Decodable {
+            struct Segment: Decodable {
+                let utf8: String?
+            }
+            let tStartMs: Int?
+            let dDurationMs: Int?
+            let segs: [Segment]?
+        }
+        let events: [Event]?
+    }
+
+    private struct CaptionTrackInfo {
+        let languageCode: String
+        let name: String
+        let isAutoGenerated: Bool
+        let baseURL: URL
+    }
+
+    // A plain, realistic desktop UA for the watch-page HTML fetch below
+    // — the only one of these three requests that seemed to care about
+    // looking like a real browser during `curl` testing (the INNERTUBE
+    // POST and the caption fetch itself worked fine even with curl's own
+    // default UA).
+    private static let desktopUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+
+    // Step 1: YouTube's own watch-page HTML embeds its current
+    // `INNERTUBE_API_KEY` (a public, non-account-specific key — not a
+    // secret, just required as a query parameter on the API call below).
+    private static func fetchInnertubeAPIKey(videoID: String) async -> String? {
+        guard let url = URL(string: "https://www.youtube.com/watch?v=\(videoID)") else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue(desktopUserAgent, forHTTPHeaderField: "User-Agent")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let html = String(data: data, encoding: .utf8),
+              let regex = try? NSRegularExpression(pattern: #""INNERTUBE_API_KEY":"([a-zA-Z0-9_-]+)""#),
+              let match = regex.firstMatch(in: html, range: NSRange(html.startIndex..., in: html)),
+              let keyRange = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+        return String(html[keyRange])
+    }
+
+    // Step 2: a fresh player response via YouTube's internal
+    // `/youtubei/v1/player` API, specifically using the ANDROID client
+    // context (the same trick `youtube-transcript-api` uses) — this
+    // returns full caption track data (including a ready-to-fetch,
+    // pre-signed `baseUrl` per track) even when the currently-loaded
+    // web page's own embedded state doesn't have it.
+    private struct InnertubePlayerResponse: Decodable {
+        struct Captions: Decodable {
+            struct TracklistRenderer: Decodable {
+                let captionTracks: [CaptionTrackJSON]?
+            }
+            let playerCaptionsTracklistRenderer: TracklistRenderer?
+        }
+        let captions: Captions?
+    }
+
+    private struct CaptionTrackJSON: Decodable {
+        struct Name: Decodable {
+            struct Run: Decodable { let text: String }
+            let runs: [Run]?
+        }
+        let baseUrl: String
+        let languageCode: String
+        let kind: String?
+        let name: Name?
+    }
+
+    private static func fetchCaptionTracks(videoID: String, apiKey: String) async -> [CaptionTrackInfo]? {
+        guard let url = URL(string: "https://www.youtube.com/youtubei/v1/player?key=\(apiKey)") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "context": ["client": ["clientName": "ANDROID", "clientVersion": "20.10.38"]],
+            "videoId": videoID
+        ]
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        request.httpBody = bodyData
+
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+              let response = try? JSONDecoder().decode(InnertubePlayerResponse.self, from: data),
+              let rawTracks = response.captions?.playerCaptionsTracklistRenderer?.captionTracks else {
+            return nil
+        }
+
+        return rawTracks.compactMap { track in
+            guard let baseURL = URL(string: track.baseUrl) else { return nil }
+            return CaptionTrackInfo(
+                languageCode: track.languageCode,
+                name: track.name?.runs?.first?.text ?? "",
+                isAutoGenerated: track.kind == "asr",
+                baseURL: baseURL
+            )
+        }
+    }
+
+    // Prefers a manually-created track (usually cleaner than
+    // auto-generated) in English, then any manual track, then whatever's
+    // first (typically the auto-generated one) — a reasonable default
+    // given there's no per-track picker here.
+    private static func bestTrack(from tracks: [CaptionTrackInfo]) -> CaptionTrackInfo? {
+        let manual = tracks.filter { !$0.isAutoGenerated }
+        return manual.first { $0.languageCode == "en" } ?? manual.first ?? tracks.first
+    }
+
+    // Step 3's URL comes back already signed and complete (with
+    // `&fmt=srv3` by default) — just swap the format for the
+    // easier-to-parse structured JSON, rather than building the URL
+    // from scratch the way the dead discovery endpoint required.
+    private static func withJSON3Format(_ url: URL) -> URL {
+        var urlString = url.absoluteString
+        if urlString.contains("fmt=srv3") {
+            urlString = urlString.replacingOccurrences(of: "fmt=srv3", with: "fmt=json3")
+        } else if !urlString.contains("fmt=") {
+            urlString += (urlString.contains("?") ? "&" : "?") + "fmt=json3"
+        }
+        return URL(string: urlString) ?? url
     }
 
     // MARK: - Listing / deleting

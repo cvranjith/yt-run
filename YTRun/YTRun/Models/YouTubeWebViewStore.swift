@@ -42,6 +42,11 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     // didn't match what we look for).
     @Published private(set) var currentChannelName: String?
 
+    // Reflects the DIY "fake fullscreen" state from `forceElementFullscreenJS`
+    // — drives hiding the app's own nav bar/status bar/status row in
+    // `YouTubeView` so the expanded player isn't squeezed by them.
+    @Published private(set) var isCustomFullscreen = false
+
     // Wired from `ContentView` to reflect the app's actual lock state.
     // Gates the Lock Screen / Control Center play button — without this,
     // that remote command bypasses the Locked screen entirely, since it
@@ -96,6 +101,13 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             WKUserScript(source: Self.antiPauseJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         )
 
+        // Defines window.__ytrunPlayerControls — shared play/pause/seek/
+        // speed helpers used by both Listen Mode and the DIY fullscreen
+        // overlay. Must be added before either of those.
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: Self.playerControlsJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        )
+
         // Must run before YouTube's own player script initializes and
         // checks `video.webkitSupportsFullscreen` — see
         // `forceElementFullscreenJS` for why this keeps captions visible
@@ -128,6 +140,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         configuration.userContentController.addUserScript(
             WKUserScript(source: Self.downloadInfoJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         )
+
 
         // Runs after the page loads (`.atDocumentEnd`). Watches for the
         // <video> element YouTube creates and reports play/pause back to
@@ -162,6 +175,8 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         // changes — see the `pageInfoJS` script for how it detects
         // Shorts-style navigation that doesn't trigger a normal page load.
         configuration.userContentController.add(self, name: "pageInfo")
+        // Reports DIY-fullscreen enter/exit — see `forceElementFullscreenJS`.
+        configuration.userContentController.add(self, name: "customFullscreen")
 
         configureAudioSession()
         configureRemoteCommandCenter()
@@ -259,6 +274,16 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     // for the next navigation), so switching modes takes effect right away.
     func applyListenMode() {
         webView.evaluateJavaScript("window.__ytrunSetListenMode(\(isListenModeEnabled()));")
+    }
+
+    // Forces an exit from the DIY "fake fullscreen" state (see
+    // `forceElementFullscreenJS`) and resets the published flag —
+    // safety-net cleanup for leaving the YouTube screen entirely while
+    // it was active, called from `YouTubeView.onDisappear`.
+    func exitCustomFullscreenIfNeeded() {
+        guard isCustomFullscreen else { return }
+        webView.evaluateJavaScript("window.__ytrunExitFakeFullscreen && window.__ytrunExitFakeFullscreen();")
+        isCustomFullscreen = false
     }
 
     // Pulls the current page's title and best-available media stream
@@ -426,6 +451,234 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     })();
     """
 
+    // Shared play/pause/seek/speed remote-control helpers, used by both
+    // Listen Mode's overlay and the DIY fullscreen overlay (see
+    // `listenModeJS`/`forceElementFullscreenJS`) — extracted here once
+    // both needed the exact same thing, rather than duplicating it.
+    // Routed through YouTube's own `#movie_player` API where possible
+    // (the same object the quality-forcing code already uses) rather
+    // than poking the raw <video> element directly — seeking in
+    // particular needs to go through the player's own logic to fetch
+    // whatever new buffered range the seek lands in, which YouTube's JS
+    // handles and a bare `video.currentTime = x` assignment does not
+    // always. Each falls back to the raw <video> element if the player
+    // API method isn't there.
+    //
+    // Also defines the shared `.ytrun-btn`/`.ytrun-controls`/etc. CSS
+    // classes both overlays' control rows use, so the two don't
+    // duplicate that styling either.
+    private static let playerControlsJS = """
+    (function () {
+        var styleId = '__ytrunControlsStyle';
+        var playbackRates = [1, 1.25, 1.5, 1.75, 2];
+
+        var style = document.createElement('style');
+        style.id = styleId;
+        style.textContent =
+            '.ytrun-transport{display:flex;flex-direction:column;align-items:center;gap:10px;' +
+            'pointer-events:auto;width:100%;font-family:-apple-system,sans-serif;}' +
+            '.ytrun-seekbar{width:90%;max-width:360px;accent-color:#fff;}' +
+            '.ytrun-controls{display:flex;align-items:center;gap:14px;}' +
+            '.ytrun-btn{background:rgba(255,255,255,0.16);color:#fff;border:none;' +
+            'border-radius:10px;padding:10px 14px;font-size:15px;min-width:44px;min-height:44px;}' +
+            '.ytrun-btn-primary{font-size:22px;padding:10px 20px;}';
+        (document.head || document.documentElement).appendChild(style);
+
+        function getPlayer() {
+            return document.getElementById('movie_player');
+        }
+
+        function findVideo() {
+            return document.querySelector('video');
+        }
+
+        function getCurrentTime() {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.getCurrentTime === 'function') {
+                    return player.getCurrentTime() || 0;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            return v ? (v.currentTime || 0) : 0;
+        }
+
+        function getDuration() {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.getDuration === 'function') {
+                    return player.getDuration() || 0;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            return v && !isNaN(v.duration) ? v.duration : 0;
+        }
+
+        function seekTo(seconds) {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.seekTo === 'function') {
+                    player.seekTo(Math.max(0, seconds), true);
+                    return;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            if (v) { v.currentTime = Math.max(0, seconds); }
+        }
+
+        function seekBy(deltaSeconds) {
+            seekTo(getCurrentTime() + deltaSeconds);
+        }
+
+        // Seeks to (approximately) the current position purely to force
+        // a fresh frame decode/paint — used after a rapid resize (like
+        // exiting DIY fullscreen) where the video can otherwise be left
+        // showing a stale/black frame until something nudges it. The
+        // half-second rewind is deliberate, not a bug: re-seeking to the
+        // *exact* current time is a no-op on some players (nothing to
+        // actually redraw), whereas landing a fraction of a second
+        // earlier reliably forces a real seek-and-redraw while staying
+        // imperceptible.
+        function nudgeRepaint() {
+            var current = getCurrentTime();
+            if (current > 0.5) { seekTo(current - 0.5); }
+            try { window.dispatchEvent(new Event('resize')); } catch (e) { /* best-effort; ignore */ }
+        }
+
+        function togglePlayPause() {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.getPlayerState === 'function'
+                    && typeof player.playVideo === 'function' && typeof player.pauseVideo === 'function') {
+                    if (player.getPlayerState() === 1) { player.pauseVideo(); } else { player.playVideo(); }
+                    return;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            if (v) { v.paused ? v.play() : v.pause(); }
+        }
+
+        function currentPlaybackRate() {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.getPlaybackRate === 'function') {
+                    return player.getPlaybackRate() || 1;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            return v ? (v.playbackRate || 1) : 1;
+        }
+
+        function cyclePlaybackRate() {
+            var current = currentPlaybackRate();
+            var next = playbackRates[(playbackRates.indexOf(current) + 1) % playbackRates.length];
+            try {
+                var player = getPlayer();
+                if (player && typeof player.setPlaybackRate === 'function') {
+                    player.setPlaybackRate(next);
+                    return;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            if (v) { v.playbackRate = next; }
+        }
+
+        function isPlaying() {
+            try {
+                var player = getPlayer();
+                if (player && typeof player.getPlayerState === 'function') {
+                    return player.getPlayerState() === 1;
+                }
+            } catch (e) { /* fall through to raw video */ }
+            var v = findVideo();
+            return v ? !v.paused : false;
+        }
+
+        function makeButton(className, text, onClick) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'ytrun-btn ' + className;
+            button.textContent = text;
+            button.addEventListener('click', onClick);
+            return button;
+        }
+
+        // Builds a seek bar plus a "-10s / play-pause / +10s / speed"
+        // row (and, if `options.onExit` is given, a 5th exit button in
+        // that same row) — returning the whole thing as one element,
+        // plus a `sync()` to call whenever playback state might have
+        // changed elsewhere.
+        function buildTransportControls(options) {
+            options = options || {};
+            var wrapper = document.createElement('div');
+            wrapper.className = 'ytrun-transport';
+
+            var seekBar = document.createElement('input');
+            seekBar.type = 'range';
+            seekBar.min = '0';
+            seekBar.max = '1000';
+            seekBar.value = '0';
+            seekBar.className = 'ytrun-seekbar';
+            var isDragging = false;
+            seekBar.addEventListener('input', function () { isDragging = true; });
+            seekBar.addEventListener('change', function () {
+                var duration = getDuration();
+                if (duration > 0) {
+                    seekTo((Number(seekBar.value) / 1000) * duration);
+                }
+                isDragging = false;
+                sync();
+            });
+            wrapper.appendChild(seekBar);
+
+            var row = document.createElement('div');
+            row.className = 'ytrun-controls';
+
+            var back = makeButton('', '-10s', function () { seekBy(-10); sync(); });
+            var playPause = makeButton('ytrun-btn-primary', '\\u23F8', function () {
+                togglePlayPause();
+                setTimeout(sync, 150);
+            });
+            var forward = makeButton('', '+10s', function () { seekBy(10); sync(); });
+            var rate = makeButton('', '1x', function () { cyclePlaybackRate(); sync(); });
+
+            row.appendChild(back);
+            row.appendChild(playPause);
+            row.appendChild(forward);
+            row.appendChild(rate);
+            if (typeof options.onExit === 'function') {
+                row.appendChild(makeButton('', '\\u2715', options.onExit));
+            }
+            wrapper.appendChild(row);
+
+            function sync() {
+                playPause.textContent = isPlaying() ? '\\u23F8' : '\\u25B6';
+                var r = currentPlaybackRate();
+                rate.textContent = (r === 1 ? '1x' : r + 'x');
+                if (!isDragging) {
+                    var duration = getDuration();
+                    if (duration > 0) {
+                        seekBar.value = String(Math.round((getCurrentTime() / duration) * 1000));
+                    }
+                }
+            }
+
+            return { row: wrapper, sync: sync };
+        }
+
+        window.__ytrunPlayerControls = {
+            seekBy: seekBy,
+            togglePlayPause: togglePlayPause,
+            cyclePlaybackRate: cyclePlaybackRate,
+            currentPlaybackRate: currentPlaybackRate,
+            isPlaying: isPlaying,
+            makeButton: makeButton,
+            buildTransportControls: buildTransportControls,
+            nudgeRepaint: nudgeRepaint
+        };
+    })();
+    """
+
     // Best-effort "Listen Mode": forces the player down to its lowest
     // video quality (audio is unaffected — only the video track's bitrate
     // drops) via the same `#movie_player` element API YouTube's own
@@ -467,121 +720,23 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         var overlayId = '__ytrunListenOverlay';
         var styleId = '__ytrunListenStyle';
         var enabled = false;
-        var controlRefs = null;
-        var playbackRates = [1, 1.25, 1.5, 1.75, 2];
+        var controls = null;
 
-        // Routed through YouTube's own `#movie_player` API (the same
-        // object `forceLowestQuality` already uses) rather than poking
-        // the raw <video> element directly — seeking in particular needs
-        // to go through the player's own logic to fetch whatever new
-        // buffered range the seek lands in, which YouTube's JS handles
-        // and a bare `video.currentTime = x` assignment does not always.
-        // Each falls back to the raw <video> element if the player API
-        // method isn't there.
         function getPlayer() {
             return document.getElementById('movie_player');
         }
 
-        function findVideo() {
-            return document.querySelector('video');
-        }
-
-        function seekBy(deltaSeconds) {
+        function forceLowestQuality() {
             try {
                 var player = getPlayer();
-                if (player && typeof player.getCurrentTime === 'function' && typeof player.seekTo === 'function') {
-                    player.seekTo(Math.max(0, player.getCurrentTime() + deltaSeconds), true);
-                    return;
+                if (!player) { return; }
+                if (typeof player.setPlaybackQualityRange === 'function') {
+                    player.setPlaybackQualityRange('tiny', 'tiny');
                 }
-            } catch (e) { /* fall through to raw video */ }
-            var v = findVideo();
-            if (v) { v.currentTime = Math.max(0, v.currentTime + deltaSeconds); }
-        }
-
-        function togglePlayPause() {
-            try {
-                var player = getPlayer();
-                if (player && typeof player.getPlayerState === 'function'
-                    && typeof player.playVideo === 'function' && typeof player.pauseVideo === 'function') {
-                    if (player.getPlayerState() === 1) { player.pauseVideo(); } else { player.playVideo(); }
-                    return;
+                if (typeof player.setPlaybackQuality === 'function') {
+                    player.setPlaybackQuality('tiny');
                 }
-            } catch (e) { /* fall through to raw video */ }
-            var v = findVideo();
-            if (v) { v.paused ? v.play() : v.pause(); }
-        }
-
-        function cyclePlaybackRate() {
-            var current = currentPlaybackRate();
-            var next = playbackRates[(playbackRates.indexOf(current) + 1) % playbackRates.length];
-            try {
-                var player = getPlayer();
-                if (player && typeof player.setPlaybackRate === 'function') {
-                    player.setPlaybackRate(next);
-                    return;
-                }
-            } catch (e) { /* fall through to raw video */ }
-            var v = findVideo();
-            if (v) { v.playbackRate = next; }
-        }
-
-        function isPlaying() {
-            try {
-                var player = getPlayer();
-                if (player && typeof player.getPlayerState === 'function') {
-                    return player.getPlayerState() === 1;
-                }
-            } catch (e) { /* fall through to raw video */ }
-            var v = findVideo();
-            return v ? !v.paused : false;
-        }
-
-        function currentPlaybackRate() {
-            try {
-                var player = getPlayer();
-                if (player && typeof player.getPlaybackRate === 'function') {
-                    return player.getPlaybackRate() || 1;
-                }
-            } catch (e) { /* fall through to raw video */ }
-            var v = findVideo();
-            return v ? (v.playbackRate || 1) : 1;
-        }
-
-        function syncControls() {
-            if (!controlRefs) { return; }
-            controlRefs.playPause.textContent = isPlaying() ? '\\u23F8' : '\\u25B6';
-            var rate = currentPlaybackRate();
-            controlRefs.rate.textContent = (rate === 1 ? '1x' : rate + 'x');
-        }
-
-        function makeButton(className, text, onClick) {
-            var button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'ytrun-btn ' + className;
-            button.textContent = text;
-            button.addEventListener('click', onClick);
-            return button;
-        }
-
-        function buildControls(overlay) {
-            var controls = document.createElement('div');
-            controls.className = 'ytrun-controls';
-
-            var back = makeButton('', '-10s', function () { seekBy(-10); syncControls(); });
-            var playPause = makeButton('ytrun-btn-primary', '\\u23F8', function () {
-                togglePlayPause();
-                setTimeout(syncControls, 150);
-            });
-            var forward = makeButton('', '+10s', function () { seekBy(10); syncControls(); });
-            var rate = makeButton('', '1x', function () { cyclePlaybackRate(); syncControls(); });
-
-            controls.appendChild(back);
-            controls.appendChild(playPause);
-            controls.appendChild(forward);
-            controls.appendChild(rate);
-            overlay.appendChild(controls);
-
-            controlRefs = { playPause: playPause, rate: rate };
+            } catch (e) { /* best-effort; ignore */ }
         }
 
         function ensureOverlay() {
@@ -597,15 +752,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
                     'text-align:center;padding:16px;box-sizing:border-box;}' +
                     '#' + overlayId + '.ytrun-on{display:flex;}' +
                     '#' + overlayId + ' .ytrun-icon{font-size:40px;margin-bottom:8px;}' +
-                    '#' + overlayId + ' .ytrun-label{font-size:14px;opacity:0.8;margin-bottom:24px;}' +
-                    // Re-enables taps just for the control row — the
-                    // overlay itself stays `pointer-events: none` so it
-                    // never blocks anything when you're not touching a
-                    // button, but this child explicitly opts back in.
-                    '#' + overlayId + ' .ytrun-controls{display:flex;align-items:center;gap:14px;pointer-events:auto;}' +
-                    '#' + overlayId + ' .ytrun-btn{background:rgba(255,255,255,0.16);color:#fff;border:none;' +
-                    'border-radius:10px;padding:10px 14px;font-size:15px;min-width:44px;min-height:44px;}' +
-                    '#' + overlayId + ' .ytrun-btn-primary{font-size:22px;padding:10px 20px;}';
+                    '#' + overlayId + ' .ytrun-label{font-size:14px;opacity:0.8;margin-bottom:24px;}';
                 (document.head || document.documentElement).appendChild(style);
 
                 // Built with createElement/textContent rather than
@@ -627,26 +774,14 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
                 label.textContent = 'Listen Mode \\u2014 video hidden to save data';
                 overlay.appendChild(label);
 
-                buildControls(overlay);
+                controls = window.__ytrunPlayerControls.buildTransportControls();
+                overlay.appendChild(controls.row);
 
                 (document.body || document.documentElement).appendChild(overlay);
                 window.__ytrunListenOverlayError = null;
             } catch (e) {
                 window.__ytrunListenOverlayError = String(e);
             }
-        }
-
-        function forceLowestQuality() {
-            try {
-                var player = getPlayer();
-                if (!player) { return; }
-                if (typeof player.setPlaybackQualityRange === 'function') {
-                    player.setPlaybackQualityRange('tiny', 'tiny');
-                }
-                if (typeof player.setPlaybackQuality === 'function') {
-                    player.setPlaybackQuality('tiny');
-                }
-            } catch (e) { /* best-effort; ignore */ }
         }
 
         // Only black out an actual video/watch page — leaving the home
@@ -669,7 +804,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             updateOverlayVisibility();
             if (enabled) {
                 forceLowestQuality();
-                syncControls();
+                if (controls) { controls.sync(); }
             }
         };
 
@@ -696,42 +831,259 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         // the next one) — cheap enough to run more often than the
         // quality/visibility checks above.
         setInterval(function () {
-            if (enabled && isWatchPage()) { syncControls(); }
+            if (enabled && isWatchPage() && controls) { controls.sync(); }
         }, 500);
     })();
     """
 
-    // Attempts to redirect YouTube's fullscreen button from iOS's native
-    // per-<video> fullscreen to the DOM Fullscreen API on the player
-    // *container* instead, which would keep the caption overlay on
-    // screen (YouTube renders captions as sibling HTML, not a native
-    // <video> text track — iOS's native video fullscreen takes just the
-    // <video> element to a separate system presentation and leaves that
-    // overlay behind).
+    // Redirects YouTube's fullscreen button away from iOS's native
+    // per-<video> fullscreen, which hands the video off to a separate
+    // system-level presentation that leaves the caption overlay behind
+    // (YouTube renders captions as sibling HTML next to the <video> tag,
+    // not a native text track — nothing outside the page's own rendering
+    // can appear on that native surface).
     //
-    // On-device debug data showed this device's WKWebView exposes *no*
-    // working fullscreen method at all — `requestFullscreen`,
+    // On-device debug data showed this WKWebView exposes *no* working
+    // Fullscreen API at all — `requestFullscreen`,
     // `webkitRequestFullscreen`, and `webkitRequestFullScreen` were all
     // absent from `Element.prototype`, and `document.fullscreenEnabled`/
     // `document.webkitFullscreenEnabled` were both `false` — despite
     // `configuration.preferences.isElementFullscreenEnabled = true` being
-    // set (see `init` below). So container fullscreen is not actually
-    // achievable here; captions will not survive fullscreen on this
-    // device. Falls back to calling the *original*, unmodified
-    // `webkitEnterFullscreen()` in that case, so fullscreen itself still
-    // works (without captions) rather than silently doing nothing — an
-    // earlier version of this redirect had no such fallback and broke
-    // fullscreen entirely by replacing the only working implementation
-    // with a call to a method that doesn't exist on this device.
+    // set (see `init` below). So real container fullscreen isn't
+    // achievable here either. Instead of falling back to native
+    // (captionless) fullscreen, this does fullscreen ourselves: expand
+    // the player container to fill the viewport via CSS, which keeps
+    // the caption overlay (still just a normal sibling element inside
+    // that container) on screen the whole time, since nothing ever
+    // leaves the page's own DOM/rendering. Real fullscreen APIs are
+    // still tried first, in case some other device/OS combination
+    // actually has one — genuine system fullscreen (rotation, real
+    // system chrome) is strictly better when available.
     //
-    // Left in place (rather than removed) since a device/OS combination
-    // where the Fullscreen API *is* available would still benefit from
-    // the redirect, keeping captions visible there.
+    // Since we can't reliably read YouTube's own internal fullscreen
+    // state, repeated `webkitEnterFullscreen()` calls are treated as a
+    // toggle (enter if inactive, exit if active) — this lets YouTube's
+    // own fullscreen icon act as a second way to exit, alongside the
+    // explicit "✕" button and transport controls this adds. Records
+    // every attempt into `window.__ytrunLastFullscreenAttempt`, readable
+    // via the Debug Info menu item.
     //
-    // Records every attempt into `window.__ytrunLastFullscreenAttempt`,
-    // readable via the Debug Info menu item.
+    // The exit button and seek bar/play/pause/±10s/speed controls are
+    // built as their own overlay attached directly to <body> —
+    // deliberately NOT nested inside the (now full-viewport) player
+    // container. YouTube's own control bar apparently doesn't relayout
+    // correctly once its container is force-resized this way (it
+    // visibly broke on-device: no working play/pause/seek), and worse,
+    // an earlier version that appended the exit button *inside* the
+    // container ended up directly underneath YouTube's own top-right
+    // "more options" button, which silently ate every tap instead. An
+    // independent, later-in-DOM, higher-z-index overlay can't be
+    // covered by anything YouTube's own player internals do to their
+    // own container. The exit button lives in the same row as the other
+    // transport controls (via `buildTransportControls({ onExit })`)
+    // rather than floating separately.
+    //
+    // Controls auto-hide after a few seconds and toggle on tap,
+    // mirroring YouTube's own on-screen-controls behavior — otherwise
+    // they'd permanently sit over the video. The tap listener is on the
+    // player container itself (not our pointer-events:none overlay,
+    // which can't receive taps on its empty space by design — that's
+    // what lets taps reach the video underneath at all).
     private static let forceElementFullscreenJS = """
     (function () {
+        var fakeFullscreenClass = '__ytrunFakeFullscreen';
+        var overlayId = '__ytrunFullscreenControls';
+        var catcherId = '__ytrunFullscreenTapCatcher';
+        var styleId = '__ytrunFullscreenStyle';
+        var fakeFullscreenActive = false;
+        var controlsVisible = false;
+        var hideTimer = null;
+        var controls = null;
+
+        function ensureStyle() {
+            if (document.getElementById(styleId)) { return; }
+            var style = document.createElement('style');
+            style.id = styleId;
+            // `!important` on the fullscreen class: YouTube sets explicit
+            // inline width/height on this container for its normal
+            // responsive sizing, which would otherwise win over a plain
+            // class.
+            style.textContent =
+                '.' + fakeFullscreenClass + '{position:fixed !important;top:0 !important;left:0 !important;' +
+                'right:0 !important;bottom:0 !important;width:100vw !important;height:100vh !important;' +
+                'z-index:2147483000 !important;background:#000 !important;}' +
+                // Sits strictly between the fullscreen container
+                // (2147483000) and the visible controls (2147483647) —
+                // above the video so it actually receives every tap/
+                // swipe itself, below the controls so a real button
+                // press still wins the hit-test at that exact spot.
+                '#' + catcherId + '{position:fixed;inset:0;z-index:2147483400;display:none;' +
+                'background:transparent;}' +
+                '#' + catcherId + '.ytrun-on{display:block;}' +
+                '#' + overlayId + '{position:fixed;inset:0;z-index:2147483647;pointer-events:none;' +
+                'display:none;flex-direction:column;justify-content:flex-end;align-items:center;' +
+                'padding-bottom:28px;box-sizing:border-box;background:linear-gradient(transparent 60%, rgba(0,0,0,0.5));}' +
+                '#' + overlayId + '.ytrun-on{display:flex;}';
+            (document.head || document.documentElement).appendChild(style);
+        }
+
+        function findContainer() {
+            return document.getElementById('movie_player')
+                || document.querySelector('.html5-video-player');
+        }
+
+        function ensureOverlay() {
+            if (document.getElementById(overlayId)) { return; }
+            var overlay = document.createElement('div');
+            overlay.id = overlayId;
+            controls = window.__ytrunPlayerControls.buildTransportControls({ onExit: exitFakeFullscreen });
+            overlay.appendChild(controls.row);
+            (document.body || document.documentElement).appendChild(overlay);
+        }
+
+        function showControls() {
+            var overlay = document.getElementById(overlayId);
+            if (overlay) { overlay.classList.add('ytrun-on'); }
+            if (controls) { controls.sync(); }
+            controlsVisible = true;
+            clearTimeout(hideTimer);
+            hideTimer = setTimeout(function () {
+                if (fakeFullscreenActive) { hideControls(); }
+            }, 3000);
+        }
+
+        function hideControls() {
+            var overlay = document.getElementById(overlayId);
+            if (overlay) { overlay.classList.remove('ytrun-on'); }
+            controlsVisible = false;
+            clearTimeout(hideTimer);
+        }
+
+        // A dedicated, always-on-top (but below the visible controls)
+        // transparent layer that owns tap/swipe handling itself, rather
+        // than trying to listen on YouTube's own player container.
+        // Attaching to the container was unreliable in practice — its
+        // own internal touch/video handling apparently intercepts things
+        // before a listener there ever sees them (even in the capture
+        // phase, which suggested something upstream of it, e.g. a
+        // capture-phase listener on `document` itself, was stopping
+        // propagation earlier still). A layer we own outright sidesteps
+        // needing to know or fight anything about how YouTube's own
+        // event handling works: nothing else is attached to it, so
+        // nothing else can interfere with it.
+        //
+        // Tap toggles the controls exactly like YouTube's own player
+        // (tap to reveal, tap again or wait 3s to hide). A vertical
+        // swipe-down exits fullscreen outright, mirroring the standard
+        // "drag down to dismiss" gesture on iOS's native fullscreen
+        // video player. A touch that landed on one of the actual visible
+        // control buttons never reaches this layer at all — it sits
+        // above this catcher in z-index, so it wins the hit-test there.
+        function ensureTapCatcher() {
+            if (document.getElementById(catcherId)) { return; }
+            var catcher = document.createElement('div');
+            catcher.id = catcherId;
+
+            catcher.addEventListener('click', function () {
+                if (controlsVisible) { hideControls(); } else { showControls(); }
+            });
+
+            var touchStartX = null;
+            var touchStartY = null;
+            catcher.addEventListener('touchstart', function (event) {
+                if (!event.touches || event.touches.length !== 1) { return; }
+                touchStartX = event.touches[0].clientX;
+                touchStartY = event.touches[0].clientY;
+            });
+            catcher.addEventListener('touchend', function (event) {
+                if (touchStartY === null) { return; }
+                var touch = event.changedTouches && event.changedTouches[0];
+                var deltaY = touch ? touch.clientY - touchStartY : 0;
+                var deltaX = touch ? Math.abs(touch.clientX - touchStartX) : 0;
+                touchStartX = null;
+                touchStartY = null;
+                // Mostly-vertical, clearly-downward drag — a small
+                // threshold would misfire on ordinary taps/scrubs.
+                if (deltaY > 80 && deltaX < 60) {
+                    exitFakeFullscreen();
+                }
+            });
+
+            (document.body || document.documentElement).appendChild(catcher);
+        }
+
+        function notifySwift(active) {
+            try {
+                window.webkit.messageHandlers.customFullscreen.postMessage({ active: active });
+            } catch (e) { /* best-effort; ignore */ }
+        }
+
+        function enterFakeFullscreen() {
+            ensureStyle();
+            var container = findContainer();
+            if (!container) { return false; }
+            ensureOverlay();
+            ensureTapCatcher();
+            document.getElementById(catcherId).classList.add('ytrun-on');
+            container.classList.add(fakeFullscreenClass);
+            fakeFullscreenActive = true;
+            showControls();
+            notifySwift(true);
+            return true;
+        }
+
+        function exitFakeFullscreen() {
+            var container = document.querySelector('.' + fakeFullscreenClass);
+            if (container) { container.classList.remove(fakeFullscreenClass); }
+            var catcher = document.getElementById(catcherId);
+            if (catcher) { catcher.classList.remove('ytrun-on'); }
+            hideControls();
+            fakeFullscreenActive = false;
+            notifySwift(false);
+            // The rapid resize (our CSS class change plus the app's own
+            // nav bar/status bar reappearing) can otherwise leave the
+            // video showing a stale/black frame in the now-small player
+            // until something else nudges it — see `nudgeRepaint`.
+            // Delayed to let that native layout change settle first.
+            setTimeout(function () {
+                window.__ytrunPlayerControls.nudgeRepaint();
+            }, 400);
+        }
+
+        // Exposed so Swift can force an exit (e.g. leaving the YouTube
+        // screen entirely while this was active) and keep its own
+        // `isCustomFullscreen` flag consistent with reality.
+        window.__ytrunExitFakeFullscreen = exitFakeFullscreen;
+
+        // Auto-exits if the page ever navigates away from the actual
+        // watch page while fake fullscreen is active — e.g. tapping
+        // YouTube's own in-page back button. That's an SPA-style
+        // (pushState) transition, not a real page load, so
+        // `didFinish`'s reset on the Swift side never fires for it; left
+        // unhandled, the app's nav bar/status bar/status row stayed
+        // hidden indefinitely with no way back short of forcing an
+        // actual page reload some other way.
+        function exitIfLeftWatchPage() {
+            if (fakeFullscreenActive && location.pathname.indexOf('/watch') !== 0) {
+                exitFakeFullscreen();
+            }
+        }
+        var originalPushState = history.pushState;
+        history.pushState = function () {
+            originalPushState.apply(this, arguments);
+            exitIfLeftWatchPage();
+        };
+        window.addEventListener('popstate', exitIfLeftWatchPage);
+
+        // Keeps the play/pause icon, speed label, and seek bar right
+        // while controls are visible — same rationale as Listen Mode's
+        // identical interval. Also a periodic safety net for the above,
+        // in case some navigation path skips both pushState and popstate.
+        setInterval(function () {
+            if (fakeFullscreenActive && controlsVisible && controls) { controls.sync(); }
+            exitIfLeftWatchPage();
+        }, 500);
+
         function requestFullscreenOn(element) {
             if (!element) { return { ok: false, reason: 'no element' }; }
             if (typeof element.requestFullscreen === 'function') {
@@ -750,28 +1102,38 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         }
 
         try {
-            var originalEnterFullscreen = HTMLVideoElement.prototype.webkitEnterFullscreen;
             HTMLVideoElement.prototype.webkitEnterFullscreen = function () {
+                if (fakeFullscreenActive) {
+                    exitFakeFullscreen();
+                    window.__ytrunLastFullscreenAttempt = { via: 'webkitEnterFullscreen', action: 'exit fake fullscreen' };
+                    return;
+                }
                 var container = document.getElementById('movie_player')
                     || this.closest('.html5-video-player')
                     || this.parentElement;
                 var outcome = requestFullscreenOn(container);
+                if (outcome.ok) {
+                    window.__ytrunLastFullscreenAttempt = {
+                        via: 'webkitEnterFullscreen',
+                        containerFound: !!container,
+                        result: outcome
+                    };
+                    return;
+                }
+                var enteredFake = enterFakeFullscreen();
                 window.__ytrunLastFullscreenAttempt = {
                     via: 'webkitEnterFullscreen',
                     containerFound: !!container,
-                    result: outcome
+                    result: outcome,
+                    fallback: enteredFake ? 'fake fullscreen' : 'fake fullscreen failed (no container)'
                 };
-                if (!outcome.ok && typeof originalEnterFullscreen === 'function') {
-                    window.__ytrunLastFullscreenAttempt.fallback = 'native webkitEnterFullscreen';
-                    return originalEnterFullscreen.apply(this, arguments);
-                }
             };
             HTMLVideoElement.prototype.webkitEnterFullScreen = HTMLVideoElement.prototype.webkitEnterFullscreen;
         } catch (e) { /* best-effort; ignore */ }
 
-        // Also wrap whichever fullscreen entry points actually exist,
-        // purely for diagnostics — even if YouTube calls one of these
-        // directly instead of going through `webkitEnterFullscreen()`.
+        // Also wrap whichever real fullscreen entry points actually
+        // exist, purely for diagnostics — even if YouTube calls one of
+        // these directly instead of going through `webkitEnterFullscreen()`.
         ['requestFullscreen', 'webkitRequestFullscreen', 'webkitRequestFullScreen'].forEach(function (name) {
             try {
                 var original = Element.prototype[name];
@@ -786,30 +1148,30 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     """
 
     // Powers the Download feature (see `DownloadManager`). Finds the best
-    // available media stream URL(s) for the current video two ways:
+    // available media stream URL(s) by parsing `ytInitialPlayerResponse`
+    // (YouTube's own embedded player metadata) for `streamingData.formats`
+    // (progressive, combined audio+video — used for full video downloads,
+    // since muxing separate streams ourselves is out of scope) and
+    // `streamingData.adaptiveFormats` (separate audio-only streams,
+    // higher quality — used for audio downloads). Only usable when a
+    // format has a plain `url` field rather than only a
+    // `signatureCipher` — deciphering that (what yt-dlp does) is a
+    // large, constantly-shifting undertaking that's deliberately not
+    // implemented here, so ciphered-only videos just won't have a
+    // download available; `DownloadManager` reports that plainly rather
+    // than producing a broken file.
     //
-    // 1. Parses `ytInitialPlayerResponse` (YouTube's own embedded player
-    //    metadata) for `streamingData.formats` (progressive, combined
-    //    audio+video — used for full video downloads, since muxing
-    //    separate streams ourselves is out of scope) and
-    //    `streamingData.adaptiveFormats` (separate audio-only streams,
-    //    higher quality — used for audio downloads). Only usable when a
-    //    format has a plain `url` field rather than only a
-    //    `signatureCipher` — deciphering that (what yt-dlp does) is a
-    //    large, constantly-shifting undertaking that's deliberately not
-    //    implemented here, so ciphered-only videos just won't have a
-    //    download available.
-    // 2. As an audio-only fallback, a `fetch`/`XMLHttpRequest` monkey-patch
-    //    (installed at document-start, before YouTube's own scripts run)
-    //    records the most recent `googlevideo.com/videoplayback` URL the
-    //    *real* player itself already successfully requested, read off
-    //    the request URL's own `mime` parameter. Since the player
-    //    resolved and used that URL to actually play the audio, this
-    //    works even when signature deciphering would otherwise be
-    //    required — no cipher-solving needed, we're just reusing a URL
-    //    the page already proved works. Only ever used for audio: video
-    //    is captured as a separate elementary stream this way too, but
-    //    with no muxer there's nothing useful to do with it alone.
+    // An earlier version also sniffed `googlevideo.com/videoplayback`
+    // URLs the real player itself had already requested, as an
+    // audio-only fallback for ciphered videos. Removed: adaptive
+    // streaming fetches media in many small chunks (each its own
+    // `videoplayback` request, often just an initialization segment or
+    // a partial byte range), so "the most recent URL seen" was often
+    // only a fragment of the track rather than the complete resource —
+    // downloading it produced a file that looked successful but was
+    // truncated or empty. Only URLs known by construction to represent
+    // the *complete* track (the unciphered `formats`/`adaptiveFormats`
+    // entries above) are used now.
     //
     // Title comes from `document.title` (stripping the trailing
     // "- YouTube" suffix) rather than any internal DOM selector — a
@@ -817,38 +1179,6 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     // markup, unlike the channel-name scraping in `pageInfoJS` below.
     private static let downloadInfoJS = """
     (function () {
-        var sniffedAudioURL = null;
-
-        function noteRequestedURL(urlString) {
-            try {
-                if (typeof urlString !== 'string' || urlString.indexOf('googlevideo.com/videoplayback') === -1) {
-                    return;
-                }
-                var match = /[?&]mime=([^&]+)/.exec(urlString);
-                if (!match) { return; }
-                var mime = decodeURIComponent(match[1]);
-                if (mime.indexOf('audio/') === 0) {
-                    sniffedAudioURL = urlString;
-                }
-            } catch (e) { /* best-effort; ignore */ }
-        }
-
-        var originalFetch = window.fetch;
-        if (originalFetch) {
-            window.fetch = function (input) {
-                try {
-                    noteRequestedURL(typeof input === 'string' ? input : (input && input.url));
-                } catch (e) { /* best-effort; ignore */ }
-                return originalFetch.apply(this, arguments);
-            };
-        }
-
-        var originalOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function (method, url) {
-            noteRequestedURL(url);
-            return originalOpen.apply(this, arguments);
-        };
-
         function parsePlayerResponse() {
             if (window.ytInitialPlayerResponse) { return window.ytInitialPlayerResponse; }
             var scripts = document.getElementsByTagName('script');
@@ -888,8 +1218,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             var streamingData = playerResponse && playerResponse.streamingData;
 
             var videoURL = bestUncipheredURL(streamingData && streamingData.formats, false);
-            var audioURL = bestUncipheredURL(streamingData && streamingData.adaptiveFormats, true)
-                || sniffedAudioURL;
+            var audioURL = bestUncipheredURL(streamingData && streamingData.adaptiveFormats, true);
 
             return {
                 title: title,
@@ -1047,6 +1376,11 @@ extension YouTubeWebViewStore: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         applyShortsHiding()
         applyListenMode()
+        // A fresh page load always resets `forceElementFullscreenJS`'s
+        // own `fakeFullscreenActive` back to false (new JS module
+        // instance) — mirror that here so a real navigation while in
+        // fake fullscreen can't leave the nav bar permanently hidden.
+        isCustomFullscreen = false
     }
 }
 
@@ -1091,6 +1425,10 @@ extension YouTubeWebViewStore: WKScriptMessageHandler {
             if Self.isShortsURL(url), isShortsRestricted() {
                 redirectAwayFromShorts()
             }
+
+        case "customFullscreen":
+            guard let dict = message.body as? [String: Any] else { return }
+            isCustomFullscreen = dict["active"] as? Bool ?? false
 
         default:
             break

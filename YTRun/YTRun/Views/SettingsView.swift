@@ -117,6 +117,12 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Show Simulate Run Button", isOn: $settings.enableSimulateRun)
+            } footer: {
+                Text("When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself.")
+            }
+
+            Section {
                 Button("Reset today's usage", role: .destructive) {
                     showingResetConfirmation = true
                 }

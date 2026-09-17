@@ -36,11 +36,20 @@ struct LockedView: View {
             }
             .buttonStyle(.borderedProminent)
 
-            Button(simulateRunLabel) {
-                usageTracker.completeRun(minutes: settings.minutesPerRun)
+            // Hidden unless explicitly turned on in Settings — this
+            // bypasses the actual run (no GPS/distance/duration check at
+            // all), which defeats the entire point of the app if it's
+            // always sitting right here as an easy way out. Requiring a
+            // trip to Settings first adds enough friction that it's a
+            // deliberate choice, not a one-tap bypass, while still being
+            // available for legitimately testing the reward flow.
+            if settings.enableSimulateRun {
+                Button(simulateRunLabel) {
+                    usageTracker.completeRun(minutes: settings.minutesPerRun)
+                }
+                .buttonStyle(.bordered)
+                .font(.footnote)
             }
-            .buttonStyle(.bordered)
-            .font(.footnote)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
