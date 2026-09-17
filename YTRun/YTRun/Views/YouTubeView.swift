@@ -15,6 +15,7 @@ struct YouTubeView: View {
     @EnvironmentObject var webViewStore: YouTubeWebViewStore
     @EnvironmentObject var cloudSync: CloudSyncService
     @EnvironmentObject var downloadManager: DownloadManager
+    @EnvironmentObject var aiGatewayClient: AIGatewayClient
 
     @StateObject private var historyRecorder = WatchHistoryRecorder()
     @Environment(\.modelContext) private var modelContext
@@ -40,6 +41,19 @@ struct YouTubeView: View {
     // silently keeping its old @State (including a stale error from a
     // previous attempt) and never re-running its `.task`.
     @State private var captionsViewerID = UUID()
+    @State private var isShowingSummaryViewer = false
+    @State private var summaryViewerID = UUID()
+    // Whether the current video has any captions at all — gates "View
+    // Captions"/"Summarize" so tapping either doesn't send a request
+    // (to YouTube, or all the way to the AI Gateway) that's guaranteed
+    // to just come back empty. Optimistic (`true`) by default so a new
+    // video's buttons aren't disabled while the check is still running —
+    // most videos do have captions, so this only flips to `false` a
+    // moment later for the ones that don't. Keyed by video ID so
+    // revisiting a video already checked this session doesn't repeat
+    // the lookup.
+    @State private var captionsAvailable = true
+    @State private var captionsAvailabilityCache: [String: Bool] = [:]
 
     private var isLocked: Bool {
         usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
@@ -142,6 +156,10 @@ struct YouTubeView: View {
             CaptionsViewerView()
                 .id(captionsViewerID)
         }
+        .sheet(isPresented: $isShowingSummaryViewer) {
+            SummaryView()
+                .id(summaryViewerID)
+        }
         .alert("Download", isPresented: Binding(
             get: { downloadResultMessage != nil },
             set: { if !$0 { downloadResultMessage = nil } }
@@ -180,6 +198,10 @@ struct YouTubeView: View {
             // already no-ops if a sync is already in flight, so this is
             // safe to fire alongside the one in `ContentView.onAppear`.
             Task { await cloudSync.sync(modelContext: modelContext) }
+            updateCaptionsAvailability(for: webViewStore.currentURL)
+        }
+        .onChange(of: webViewStore.currentURL) { _, newURL in
+            updateCaptionsAvailability(for: newURL)
         }
         .onDisappear {
             // Covers fully leaving this screen (e.g. tapping back to Home).
@@ -292,6 +314,15 @@ struct YouTubeView: View {
                 } label: {
                     Label("View Captions", systemImage: "captions.bubble")
                 }
+                .disabled(!captionsAvailable)
+
+                Button {
+                    summaryViewerID = UUID()
+                    isShowingSummaryViewer = true
+                } label: {
+                    Label("Summarize", systemImage: "text.bubble")
+                }
+                .disabled(!captionsAvailable)
             } label: {
                 if downloadManager.isDownloading {
                     ProgressView()
@@ -400,6 +431,33 @@ struct YouTubeView: View {
         }
     }
 
+    // Checks (and caches, per video ID) whether the current video has
+    // any captions at all, so "View Captions"/"Summarize" can be
+    // disabled up front instead of failing after a round trip. Not a
+    // watch page at all (no video ID) counts as unavailable too, since
+    // neither action means anything there.
+    private func updateCaptionsAvailability(for url: URL?) {
+        guard let videoID = DownloadManager.videoID(from: url) else {
+            captionsAvailable = false
+            return
+        }
+        if let cached = captionsAvailabilityCache[videoID] {
+            captionsAvailable = cached
+            return
+        }
+        captionsAvailable = true
+        Task {
+            let available = await downloadManager.hasCaptions(videoID: videoID)
+            captionsAvailabilityCache[videoID] = available
+            // Only apply if still on the same video — a quick nav away
+            // and back shouldn't let a slower, now-stale check clobber
+            // whatever the more recent one already decided.
+            if DownloadManager.videoID(from: webViewStore.currentURL) == videoID {
+                captionsAvailable = available
+            }
+        }
+    }
+
     // Accepts either a bare video ID ("dQw4w9WgXcQ") or a full URL in any
     // of YouTube's link shapes (youtube.com/watch?v=…, youtu.be/…,
     // youtube.com/shorts/…) and turns it into something WKWebView can load.
@@ -431,4 +489,5 @@ struct YouTubeView: View {
     .environmentObject(YouTubeWebViewStore())
     .environmentObject(CloudSyncService())
     .environmentObject(DownloadManager())
+    .environmentObject(AIGatewayClient())
 }

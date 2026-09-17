@@ -113,7 +113,7 @@ struct CaptionsViewerView: View {
     }
 
     private func load() async {
-        guard let videoID = Self.videoID(from: webViewStore.currentURL) else {
+        guard let videoID = DownloadManager.videoID(from: webViewStore.currentURL) else {
             errorMessage = "Couldn't tell which video this is — try again once the page has fully loaded."
             isLoading = false
             return
@@ -143,14 +143,6 @@ struct CaptionsViewerView: View {
         case .failure(let error):
             saveResultMessage = error.message
         }
-    }
-
-    private static func videoID(from url: URL?) -> String? {
-        guard let url else { return nil }
-        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?
-            .first(where: { $0.name == "v" })?
-            .value
     }
 }
 

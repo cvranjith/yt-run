@@ -31,6 +31,9 @@ final class AppSettings: ObservableObject {
         static let enableSimulateRun = "enableSimulateRun"
         static let listenRatePercent = "listenRatePercent"
         static let carRatePercent = "carRatePercent"
+        static let aiGatewayURI = "aiGatewayURI"
+        static let aiGatewayClientID = "aiGatewayClientID"
+        static let aiGatewayClientSecret = "aiGatewayClientSecret"
     }
 
     private enum Defaults {
@@ -157,6 +160,24 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(carRatePercent, forKey: Keys.carRatePercent) }
     }
 
+    // Base URL of a self-hosted ai-gateway instance (see that project's
+    // own README) — e.g. "https://your-host.ts.net/gateway". Used by
+    // the YouTube screen's "Summarize" feature. Stored the same way as
+    // every other setting here (plain UserDefaults, not Keychain) —
+    // consistent with the gateway's own server-side config, which is
+    // equally plaintext-on-disk for this personal, single-user setup.
+    @Published var aiGatewayURI: String {
+        didSet { UserDefaults.standard.set(aiGatewayURI, forKey: Keys.aiGatewayURI) }
+    }
+
+    @Published var aiGatewayClientID: String {
+        didSet { UserDefaults.standard.set(aiGatewayClientID, forKey: Keys.aiGatewayClientID) }
+    }
+
+    @Published var aiGatewayClientSecret: String {
+        didSet { UserDefaults.standard.set(aiGatewayClientSecret, forKey: Keys.aiGatewayClientSecret) }
+    }
+
     init() {
         let defaults = UserDefaults.standard
 
@@ -187,5 +208,8 @@ final class AppSettings: ObservableObject {
             ?? Defaults.listenRatePercent
         self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int
             ?? Defaults.carRatePercent
+        self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? ""
+        self.aiGatewayClientID = defaults.string(forKey: Keys.aiGatewayClientID) ?? ""
+        self.aiGatewayClientSecret = defaults.string(forKey: Keys.aiGatewayClientSecret) ?? ""
     }
 }

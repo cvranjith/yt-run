@@ -43,9 +43,16 @@ struct LockedView: View {
             // trip to Settings first adds enough friction that it's a
             // deliberate choice, not a one-tap bypass, while still being
             // available for legitimately testing the reward flow.
+            //
+            // Auto-disables itself the moment it's used (turning the
+            // Settings toggle back off), so that friction is per-use, not
+            // just per-session — using it again means going back to
+            // Settings and turning it on again, rather than it just
+            // sitting here armed indefinitely once switched on.
             if settings.enableSimulateRun {
                 Button(simulateRunLabel) {
                     usageTracker.completeRun(minutes: settings.minutesPerRun)
+                    settings.enableSimulateRun = false
                 }
                 .buttonStyle(.bordered)
                 .font(.footnote)

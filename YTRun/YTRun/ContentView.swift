@@ -40,6 +40,11 @@ struct ContentView: View {
     // to the YouTube screen, rather than resetting with a fresh instance
     // each time that screen appears.
     @StateObject private var downloadManager = DownloadManager()
+    // Caches its OAuth bearer token in memory for as long as the app
+    // runs, so summarizing several videos in a row only signs in once —
+    // owned here (not inside SummaryView) for the same reason as
+    // `downloadManager`.
+    @StateObject private var aiGatewayClient = AIGatewayClient()
 
     @Environment(\.modelContext) private var modelContext
 
@@ -90,6 +95,7 @@ struct ContentView: View {
         .environmentObject(runTracker)
         .environmentObject(cloudSync)
         .environmentObject(downloadManager)
+        .environmentObject(aiGatewayClient)
         .onAppear {
             // Lets the Lock Screen / Control Center play button respect
             // the app's own lock state — without this, tapping play there

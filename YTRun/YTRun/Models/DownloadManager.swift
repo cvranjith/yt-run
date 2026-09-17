@@ -172,6 +172,22 @@ final class DownloadManager: ObservableObject {
     // baseUrl already signed and ready to fetch directly — unlike the
     // dead discovery endpoint, that per-track URL still works fine.
     // Entirely native networking now; no WebView/JS bridging involved.
+    // Cheap presence check — reuses the same lookup `fetchCaptionEvents`
+    // does, but stops as soon as it knows whether any caption track
+    // exists, without fetching a transcript. Lets the UI grey out "View
+    // Captions"/"Summarize" for videos with none at all, the same way
+    // YouTube's own apps do — by asking an INNERTUBE client context
+    // that actually includes caption tracks in its player response.
+    // (The mobile web page's own embedded `ytInitialPlayerResponse`
+    // does NOT reliably include this — confirmed absent even for videos
+    // that do have captions — which is why this native check exists
+    // instead of just reading something already on the page.)
+    func hasCaptions(videoID: String) async -> Bool {
+        guard let apiKey = await Self.fetchInnertubeAPIKey(videoID: videoID) else { return false }
+        guard let tracks = await Self.fetchCaptionTracks(videoID: videoID, apiKey: apiKey) else { return false }
+        return !tracks.isEmpty
+    }
+
     func fetchCaptionEvents(videoID: String) async -> Result<[CaptionEvent], DownloadError> {
         guard let apiKey = await Self.fetchInnertubeAPIKey(videoID: videoID) else {
             return .failure(.noCaptionsAvailable)
@@ -221,6 +237,18 @@ final class DownloadManager: ObservableObject {
             return .failure(.fileSystem(error))
         }
         return .success(destinationURL)
+    }
+
+    // Shared by every feature that needs to know which video is
+    // currently on screen (captions, summarize) — pulled from the `v`
+    // query item on the watch-page URL, same as everywhere else in the
+    // app that already parses one out.
+    static func videoID(from url: URL?) -> String? {
+        guard let url else { return nil }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "v" })?
+            .value
     }
 
     static func plainText(from events: [CaptionEvent]) -> String {

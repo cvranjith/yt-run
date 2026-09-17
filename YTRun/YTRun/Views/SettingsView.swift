@@ -11,8 +11,11 @@ struct SettingsView: View {
     // every screen that needs settings/usage reads the same instances.
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
+    @EnvironmentObject var aiGatewayClient: AIGatewayClient
 
     @State private var showingResetConfirmation = false
+    @State private var isTestingConnection = false
+    @State private var connectionTestMessage: String?
 
     var body: some View {
         // Form gives us the standard iOS Settings-app look (grouped rows)
@@ -119,7 +122,32 @@ struct SettingsView: View {
             Section {
                 Toggle("Show Simulate Run Button", isOn: $settings.enableSimulateRun)
             } footer: {
-                Text("When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself.")
+                Text("When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself — using it once turns this back off automatically, so it doesn't just sit there armed.")
+            }
+
+            Section {
+                TextField("https://your-host/gateway", text: $settings.aiGatewayURI)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                TextField("Client ID", text: $settings.aiGatewayClientID)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                SecureField("Client Secret", text: $settings.aiGatewayClientSecret)
+                Button {
+                    Task { await testConnection() }
+                } label: {
+                    if isTestingConnection {
+                        ProgressView()
+                    } else {
+                        Text("Test Connection")
+                    }
+                }
+                .disabled(isTestingConnection)
+            } header: {
+                Text("AI Gateway")
+            } footer: {
+                Text("Powers \"Summarize\" on the YouTube screen. Get these from your ai-gateway's own /ui dashboard (Sign in → Clients panel) — see that project's README.")
             }
 
             Section {
@@ -159,6 +187,26 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .alert("AI Gateway", isPresented: Binding(
+            get: { connectionTestMessage != nil },
+            set: { if !$0 { connectionTestMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(connectionTestMessage ?? "")
+        }
+    }
+
+    private func testConnection() async {
+        isTestingConnection = true
+        let result = await aiGatewayClient.testConnection(settings: settings)
+        isTestingConnection = false
+        switch result {
+        case .success:
+            connectionTestMessage = "Connected successfully."
+        case .failure(let error):
+            connectionTestMessage = error.message
+        }
     }
 
     // Small reusable row so the three sections stay visually consistent.
@@ -187,4 +235,5 @@ struct SettingsView: View {
     }
     .environmentObject(AppSettings())
     .environmentObject(UsageTracker())
+    .environmentObject(AIGatewayClient())
 }
