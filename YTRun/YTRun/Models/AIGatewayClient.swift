@@ -31,6 +31,18 @@ struct AIGatewayDownloadInfo {
     let filesize: Int?
 }
 
+struct MacWifiInfo {
+    let ssid: String?
+    let ip: String?
+    // The definitive answer to "will a deploy actually reach a device
+    // right now" — ai-gateway runs the same devicectl pairing check
+    // install_to_device.sh itself uses to find a device, rather than
+    // this just being inferred from Wi-Fi. `ssid`/`ip` are purely
+    // informational at that point, for telling the user which network
+    // to switch to when this is false because of that.
+    let proceedOK: Bool
+}
+
 enum MacDeployStatus: String {
     case idle, running, success, failed
 }
@@ -561,10 +573,14 @@ final class AIGatewayClient: ObservableObject {
     // rely on. "startDeploy" kicks it off and returns immediately;
     // callers poll `deployStatus` on their own timer.
 
-    func macWifiSSID(settings: AppSettings) async -> Result<String?, AIGatewayError> {
+    func macWifiStatus(settings: AppSettings) async -> Result<MacWifiInfo, AIGatewayError> {
         switch await callDeployAction("wifi_status", settings: settings) {
         case .success(let json):
-            return .success(json["ssid"] as? String)
+            return .success(MacWifiInfo(
+                ssid: json["ssid"] as? String,
+                ip: json["ip"] as? String,
+                proceedOK: json["proceed_ok"] as? Bool ?? false
+            ))
         case .failure(let error):
             return .failure(error)
         }
