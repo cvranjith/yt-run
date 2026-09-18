@@ -66,6 +66,9 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     header
+                    if let expiryBanner {
+                        expiryBanner
+                    }
                     statsCard
 
                     LazyVGrid(columns: gridColumns, spacing: 16) {
@@ -142,6 +145,37 @@ struct ContentView: View {
                 .bold()
         }
         .padding(.top, 8)
+    }
+
+    // A free-account install has a hard expiration date baked into its
+    // own provisioning profile (see ProvisioningProfile) — this is
+    // nil (and the banner just doesn't appear) for a build that has no
+    // such profile at all, e.g. a real App Store/TestFlight build.
+    private var expiryBanner: AnyView? {
+        guard let expirationDate = ProvisioningProfile.expirationDate,
+              let daysRemaining = ProvisioningProfile.daysRemaining() else {
+            return nil
+        }
+        let isUrgent = daysRemaining <= 2
+        let dateText = expirationDate.formatted(date: .abbreviated, time: .omitted)
+        let daysText = daysRemaining <= 0
+            ? "today"
+            : daysRemaining == 1 ? "in 1 day" : "in \(daysRemaining) days"
+
+        return AnyView(HStack(spacing: 8) {
+            Image(systemName: isUrgent ? "exclamationmark.triangle.fill" : "clock")
+            Text("App expires \(daysText) (\(dateText)) — reinstall from Xcode to renew.")
+                .font(.caption)
+                .fontWeight(isUrgent ? .semibold : .regular)
+        }
+        .foregroundStyle(isUrgent ? Color.red : .secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            (isUrgent ? Color.red : Color.secondary).opacity(0.12),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        ))
     }
 
     private var statsCard: some View {
