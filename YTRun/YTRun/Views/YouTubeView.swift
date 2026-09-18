@@ -32,6 +32,10 @@ struct YouTubeView: View {
     @State private var isShowingURLEntry = false
     @State private var urlInput = ""
     @State private var downloadResultMessage: String?
+    @State private var lastDownloadSucceeded = false
+    @State private var isShowingDownloadsFromAlert = false
+    @State private var isShowingRenameDownload = false
+    @State private var renameDownloadText = ""
     @State private var debugInfoMessage: String?
     @State private var isShowingCaptionsViewer = false
     // Regenerated each time the sheet is opened (see the button below)
@@ -203,9 +207,15 @@ struct YouTubeView: View {
             get: { downloadResultMessage != nil },
             set: { if !$0 { downloadResultMessage = nil } }
         )) {
+            if lastDownloadSucceeded {
+                Button("View File") { isShowingDownloadsFromAlert = true }
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(downloadResultMessage ?? "")
+        }
+        .navigationDestination(isPresented: $isShowingDownloadsFromAlert) {
+            DownloadsView()
         }
         .alert("Debug Info", isPresented: Binding(
             get: { debugInfoMessage != nil },
@@ -435,24 +445,61 @@ struct YouTubeView: View {
     // stays 0 (falls back to an indeterminate bar) if the server
     // response never included a Content-Length to compute a fraction
     // from, which is out of our control.
+    //
+    // The title row doubles as the rename affordance (tap to edit) and
+    // carries the Cancel button — both act on `downloadManager` directly
+    // rather than through a result callback, since there's no "result"
+    // yet for an in-flight download.
     private var downloadProgressBar: some View {
         VStack(spacing: 2) {
+            HStack(spacing: 8) {
+                Button {
+                    renameDownloadText = downloadManager.currentDownloadTitle ?? ""
+                    isShowingRenameDownload = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(downloadManager.currentDownloadTitle ?? "Downloading…")
+                            .font(.caption2)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Image(systemName: "pencil")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                Button {
+                    downloadManager.cancel()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Cancel Download")
+            }
+
             if downloadManager.downloadProgress > 0 {
                 ProgressView(value: downloadManager.downloadProgress)
-                Text("Downloading… \(Int(downloadManager.downloadProgress * 100))%")
+                Text("\(Int(downloadManager.downloadProgress * 100))%")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
                 ProgressView()
-                Text("Downloading…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
         .progressViewStyle(.linear)
         .padding(.horizontal)
         .padding(.bottom, 6)
         .background(.bar)
+        .alert("Rename Download", isPresented: $isShowingRenameDownload) {
+            TextField("Name", text: $renameDownloadText)
+            Button("Save") {
+                downloadManager.renameCurrentDownload(to: renameDownloadText)
+            }
+            Button("Cancel", role: .cancel) {}
+        }
     }
 
     // A `.sheet` is a modal card that slides up from the bottom — the
@@ -505,7 +552,8 @@ struct YouTubeView: View {
     // subset the old WebView-scraping approach could reach.
     private func performDownload(kind: AIGatewayDownloadKind) async {
         guard let videoID = DownloadManager.videoID(from: webViewStore.currentURL) else {
-            downloadResultMessage = "Couldn't tell which video this is — try again once the page has fully loaded."
+            lastDownloadSucceeded = false
+            showDownloadResult("Couldn't tell which video this is — try again once the page has fully loaded.")
             return
         }
         let info = await webViewStore.fetchDownloadInfo()
@@ -518,9 +566,27 @@ struct YouTubeView: View {
         )
         switch result {
         case .success(let url):
-            downloadResultMessage = "Saved as \(url.lastPathComponent)."
+            lastDownloadSucceeded = true
+            showDownloadResult("Saved as \(url.lastPathComponent).")
         case .failure(let error):
-            downloadResultMessage = error.message
+            lastDownloadSucceeded = false
+            showDownloadResult(error.message)
+        }
+    }
+
+    // Auto-dismisses after a few seconds rather than sitting there until
+    // tapped away — a "View File"/"OK" choice is nice to have, but
+    // shouldn't be mandatory just to keep watching. Guards against a
+    // stale timer clobbering a newer message (e.g. a second, faster
+    // download finishing before this one's 5 seconds are up) by only
+    // clearing if the message it was scheduled for is still showing.
+    private func showDownloadResult(_ message: String) {
+        downloadResultMessage = message
+        Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if downloadResultMessage == message {
+                downloadResultMessage = nil
+            }
         }
     }
 

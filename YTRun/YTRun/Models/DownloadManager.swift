@@ -47,6 +47,7 @@ enum DownloadError: Error {
     case fileSystem(Error)
     case emptyOrTruncated
     case gateway(AIGatewayError)
+    case cancelled
 
     var message: String {
         switch self {
@@ -62,6 +63,8 @@ enum DownloadError: Error {
             return "The download came back empty or incomplete, so it wasn't saved. This can happen if YouTube's stream link expired mid-download — try again."
         case .gateway(let error):
             return error.message
+        case .cancelled:
+            return "Download cancelled."
         }
     }
 }
@@ -98,6 +101,20 @@ final class DownloadManager: ObservableObject {
     // sends a Content-Length — before that (or if it never does), this
     // just stays at 0 and the UI falls back to an indeterminate spinner.
     @Published private(set) var downloadProgress: Double = 0
+    // The name the file will be saved under, meaningful only while
+    // `isDownloading`. Starts out as whatever title the caller/gateway
+    // resolved, but `renameCurrentDownload(to:)` can override it before
+    // the transfer finishes — see that method and `uniqueDestinationURL`
+    // below, which is what actually consumes this once the bytes are in.
+    @Published private(set) var currentDownloadTitle: String?
+    // Once the user has manually renamed the in-flight download, the
+    // gateway's own resolved title (which can arrive slightly later,
+    // after the network round trip) must not silently clobber it.
+    private var didRenameCurrentDownload = false
+    // Holds the in-flight coordinator so `cancel()` has something to
+    // call into — `download(...)` used to keep this as a bare local,
+    // which meant nothing could reach it once started.
+    private var activeCoordinator: DownloadTaskCoordinator?
 
     static let downloadsDirectory: URL = {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -124,9 +141,14 @@ final class DownloadManager: ObservableObject {
 
         isDownloading = true
         downloadProgress = 0
+        currentDownloadTitle = fallbackTitle
+        didRenameCurrentDownload = false
         defer {
             isDownloading = false
             downloadProgress = 0
+            currentDownloadTitle = nil
+            didRenameCurrentDownload = false
+            activeCoordinator = nil
         }
 
         let resolved: AIGatewayDownloadInfo
@@ -136,15 +158,24 @@ final class DownloadManager: ObservableObject {
         case .failure(let error):
             return .failure(.gateway(error))
         }
+        // A rename typed in the moment between starting the download and
+        // this resolving must win over the gateway's own title.
+        if !didRenameCurrentDownload && !resolved.title.isEmpty {
+            currentDownloadTitle = resolved.title
+        }
 
         let coordinator = DownloadTaskCoordinator { [weak self] fraction in
             self?.downloadProgress = fraction
         }
+        activeCoordinator = coordinator
 
         let tempURL: URL
         do {
             tempURL = try await coordinator.start(request: URLRequest(url: resolved.url))
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled {
+                return .failure(.cancelled)
+            }
             return .failure(.network(error))
         }
 
@@ -159,7 +190,7 @@ final class DownloadManager: ObservableObject {
         }
 
         let destinationURL = Self.uniqueDestinationURL(
-            title: resolved.title.isEmpty ? fallbackTitle : resolved.title,
+            title: currentDownloadTitle ?? fallbackTitle,
             extension: resolved.ext
         )
         do {
@@ -168,6 +199,29 @@ final class DownloadManager: ObservableObject {
             return .failure(.fileSystem(error))
         }
         return .success(destinationURL)
+    }
+
+    // Lets the caller abort an in-flight download — for an accidental
+    // tap, or one that's stalled/slow and no longer worth waiting on.
+    // The coordinator's `URLSessionTask.cancel()` triggers
+    // `didCompleteWithError` with `NSURLErrorCancelled`, which `download`
+    // above maps to `.cancelled`; that in turn runs the same `defer`
+    // cleanup as any other exit path, so there's nothing extra to reset
+    // here.
+    func cancel() {
+        activeCoordinator?.cancel()
+    }
+
+    // Lets the user override the eventual filename while a download is
+    // still in flight — e.g. because the resolved/page title is unusable
+    // or just not what they want. Has no effect once the download has
+    // finished (or if none is in progress), since at that point renaming
+    // means moving a file on disk instead (see `rename(_:to:)`).
+    func renameCurrentDownload(to newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isDownloading, !trimmed.isEmpty else { return }
+        currentDownloadTitle = trimmed
+        didRenameCurrentDownload = true
     }
 
     // Fetches the video's captions for on-screen viewing — saving to a
@@ -468,6 +522,38 @@ final class DownloadManager: ObservableObject {
         try FileManager.default.removeItem(at: file.url)
     }
 
+    // Renames an already-completed download. Since a `DownloadedFile`'s
+    // identity is just its on-disk URL (see the type's own comment
+    // above — there's no separate metadata store), this is a plain
+    // filesystem move, reusing the same sanitization `uniqueDestinationURL`
+    // applies to a fresh download so the result is guaranteed a valid,
+    // non-colliding filename too.
+    static func rename(_ file: DownloadedFile, to newTitle: String) -> Result<DownloadedFile, DownloadError> {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .failure(.fileSystem(NSError(domain: "DownloadManager", code: 0, userInfo: [
+                NSLocalizedDescriptionKey: "Name can't be empty."
+            ])))
+        }
+
+        let ext = file.url.pathExtension
+        let newURL = uniqueDestinationURL(title: trimmed, extension: ext)
+        do {
+            try FileManager.default.moveItem(at: file.url, to: newURL)
+        } catch {
+            return .failure(.fileSystem(error))
+        }
+
+        let values = try? newURL.resourceValues(forKeys: [.fileSizeKey, .creationDateKey])
+        return .success(DownloadedFile(
+            id: newURL,
+            url: newURL,
+            name: newURL.deletingPathExtension().lastPathComponent,
+            sizeBytes: values?.fileSize.map(Int64.init) ?? file.sizeBytes,
+            createdAt: values?.creationDate ?? file.createdAt
+        ))
+    }
+
     // MARK: - Filename
 
     private static let invalidFilenameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
@@ -508,6 +594,9 @@ final class DownloadManager: ObservableObject {
 private final class DownloadTaskCoordinator: NSObject, URLSessionDownloadDelegate {
     private let onProgress: (Double) -> Void
     private var continuation: CheckedContinuation<URL, Error>?
+    // Kept so `cancel()` has something to act on — the original code
+    // never stored the task `session.downloadTask(with:)` returned.
+    private var task: URLSessionDownloadTask?
 
     init(onProgress: @escaping (Double) -> Void) {
         self.onProgress = onProgress
@@ -517,8 +606,18 @@ private final class DownloadTaskCoordinator: NSObject, URLSessionDownloadDelegat
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-            session.downloadTask(with: request).resume()
+            let task = session.downloadTask(with: request)
+            self.task = task
+            task.resume()
         }
+    }
+
+    // Triggers `didCompleteWithError` below with `NSURLErrorCancelled`,
+    // which resumes the continuation with that error rather than hanging
+    // forever — no resume data requested, since a partial video/audio
+    // file isn't useful to resume into later.
+    func cancel() {
+        task?.cancel()
     }
 
     func urlSession(

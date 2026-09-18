@@ -14,6 +14,8 @@ struct DownloadsView: View {
 
     @State private var downloads: [DownloadedFile] = []
     @State private var selectedFile: DownloadedFile?
+    @State private var renameTarget: DownloadedFile?
+    @State private var renameText = ""
     // Shared with `CaptionsViewerView` via the same `@AppStorage` key.
     @AppStorage("transcriptFontSize") private var fontSize: Double = 17
 
@@ -43,6 +45,14 @@ struct DownloadsView: View {
                                 Label("Delete", systemImage: "trash")
                             }
                         }
+                        .swipeActions(edge: .leading) {
+                            Button {
+                                beginRename(file)
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
+                        }
                 }
                 .onDelete(perform: deleteDownloads)
             }
@@ -69,6 +79,17 @@ struct DownloadsView: View {
                         if Self.textExtensions.contains(file.url.pathExtension.lowercased()) {
                             FontSizeControl(fontSize: $fontSize)
                         }
+                        // Reachable from right inside the viewer — not
+                        // just the list's swipe action — since renaming
+                        // often happens right after actually looking at
+                        // the file and deciding the current name isn't
+                        // useful.
+                        Button {
+                            beginRename(file)
+                        } label: {
+                            Image(systemName: "pencil")
+                        }
+                        .accessibilityLabel("Rename")
                         // A delete action reachable from right inside the
                         // viewer — not just the list's swipe action —
                         // since deciding "I don't want this" often
@@ -84,6 +105,30 @@ struct DownloadsView: View {
                 }
             }
         }
+        .alert("Rename Download", isPresented: Binding(
+            get: { renameTarget != nil },
+            set: { if !$0 { renameTarget = nil } }
+        )) {
+            TextField("Name", text: $renameText)
+            Button("Save") {
+                if let renameTarget {
+                    rename(renameTarget, to: renameText)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func beginRename(_ file: DownloadedFile) {
+        renameText = file.name
+        renameTarget = file
+    }
+
+    private func rename(_ file: DownloadedFile, to newTitle: String) {
+        if case .success(let renamed) = DownloadManager.rename(file, to: newTitle), selectedFile?.id == file.id {
+            selectedFile = renamed
+        }
+        reload()
     }
 
     private func reload() {
