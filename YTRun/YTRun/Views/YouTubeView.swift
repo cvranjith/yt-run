@@ -33,6 +33,14 @@ struct YouTubeView: View {
     @State private var urlInput = ""
     @State private var downloadResultMessage: String?
     @State private var lastDownloadSucceeded = false
+    // Cancelling this aborts a still-resolving download (e.g. ai-gateway
+    // extracting audio server-side, which can take a while — see
+    // AIGatewayClient's longer timeout for that call) via Swift's
+    // cooperative task cancellation, which URLSession's async APIs
+    // observe on their own. Once the actual file transfer has started,
+    // cancelling this alone isn't enough — see the Cancel button below,
+    // which also calls `downloadManager.cancel()` for that phase.
+    @State private var downloadTask: Task<Void, Never>?
     @State private var isShowingDownloadsFromAlert = false
     @State private var isShowingRenameDownload = false
     @State private var renameDownloadText = ""
@@ -353,13 +361,13 @@ struct YouTubeView: View {
 
             Menu {
                 Button {
-                    Task { await performDownload(kind: .video) }
+                    downloadTask = Task { await performDownload(kind: .video) }
                 } label: {
                     Label("Download Video", systemImage: "video")
                 }
 
                 Button {
-                    Task { await performDownload(kind: .audio) }
+                    downloadTask = Task { await performDownload(kind: .audio) }
                 } label: {
                     Label("Download Audio Only", systemImage: "waveform")
                 }
@@ -472,6 +480,7 @@ struct YouTubeView: View {
                 Spacer(minLength: 8)
 
                 Button {
+                    downloadTask?.cancel()
                     downloadManager.cancel()
                 } label: {
                     Image(systemName: "xmark.circle.fill")

@@ -38,6 +38,7 @@ enum AIGatewayError: Error {
     case unauthorized
     case server(String)
     case decoding
+    case cancelled
 
     var message: String {
         switch self {
@@ -53,6 +54,8 @@ enum AIGatewayError: Error {
             return message
         case .decoding:
             return "Got an unexpected response from the AI Gateway."
+        case .cancelled:
+            return "Download cancelled."
         }
     }
 }
@@ -278,6 +281,13 @@ final class AIGatewayClient: ObservableObject {
 
         var request = URLRequest(url: baseURL.appendingPathComponent("invoke"))
         request.httpMethod = "POST"
+        // "audio" can mean a server-side ffmpeg extraction step against
+        // ai-gateway's youtube_download service (see that project's own
+        // comments on why) that can run well past URLSession's default
+        // 60s request timeout for a longer video — this call needs
+        // however long that takes, and cancelling the enclosing Task
+        // (see YouTubeView's Cancel button) aborts it promptly anyway.
+        request.timeoutInterval = 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
@@ -290,6 +300,9 @@ final class AIGatewayClient: ObservableObject {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled {
+                return .failure(.cancelled)
+            }
             return .failure(.network(error))
         }
 
@@ -312,7 +325,7 @@ final class AIGatewayClient: ObservableObject {
         guard let result = json["result"] as? [String: Any] else {
             return .failure(.decoding)
         }
-        return Self.downloadInfo(from: result)
+        return Self.downloadInfo(from: result, baseURL: baseURL)
     }
 
     // Token path — straight to ai-router, "local.download" service.
@@ -331,6 +344,9 @@ final class AIGatewayClient: ObservableObject {
 
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/invoke"))
         request.httpMethod = "POST"
+        // See the matching comment in resolveDownloadURLViaGateway —
+        // "audio" can take a while server-side.
+        request.timeoutInterval = 300
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try? JSONSerialization.data(withJSONObject: [
@@ -344,6 +360,9 @@ final class AIGatewayClient: ObservableObject {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
+            if (error as NSError).code == NSURLErrorCancelled {
+                return .failure(.cancelled)
+            }
             return .failure(.network(error))
         }
 
@@ -365,12 +384,23 @@ final class AIGatewayClient: ObservableObject {
         guard let output = json["output"] as? [String: Any] else {
             return .failure(.decoding)
         }
-        return Self.downloadInfo(from: output)
+        // ai-router already resolves "local.download"'s audio path to an
+        // absolute URL itself (it knows its own AI_GATEWAY_URL), but
+        // resolving here too is harmless and keeps this call site
+        // symmetric with the direct-gateway one above.
+        return Self.downloadInfo(from: output, baseURL: baseURL)
     }
 
-    private static func downloadInfo(from result: [String: Any]) -> Result<AIGatewayDownloadInfo, AIGatewayError> {
+    // `result["url"]` is either already absolute (the "video" kind's
+    // direct YouTube CDN URL) or a path relative to `baseURL` (the
+    // "audio" kind's server-extracted file — see ai-gateway's
+    // services/youtube_download.py for why). `URL(string:relativeTo:)`
+    // handles both the same way: an absolute string ignores
+    // `relativeTo` entirely, so there's no need to branch on which case
+    // this is.
+    private static func downloadInfo(from result: [String: Any], baseURL: URL) -> Result<AIGatewayDownloadInfo, AIGatewayError> {
         guard let urlString = result["url"] as? String,
-              let url = URL(string: urlString),
+              let url = URL(string: urlString, relativeTo: baseURL)?.absoluteURL,
               let ext = result["ext"] as? String else {
             return .failure(.decoding)
         }
