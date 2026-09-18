@@ -31,6 +31,15 @@ struct AIGatewayDownloadInfo {
     let filesize: Int?
 }
 
+enum MacDeployStatus: String {
+    case idle, running, success, failed
+}
+
+struct MacDeployStatusInfo {
+    let status: MacDeployStatus
+    let logTail: String?
+}
+
 enum AIGatewayError: Error {
     case notConfigured
     case invalidURL
@@ -539,5 +548,104 @@ final class AIGatewayClient: ObservableObject {
         // "https://host/gateway" both work the same.
         if trimmed.hasSuffix("/") { trimmed.removeLast() }
         return URL(string: trimmed)
+    }
+
+    // MARK: - Mac deploy (self-update)
+    //
+    // Lets the app trigger a real rebuild+reinstall of itself onto this
+    // device via ai-gateway's mac_deploy service — see that project's
+    // own comments for why this is three quick actions rather than one
+    // long-blocking call: a real deploy is a multi-minute clean build,
+    // and holding a single HTTP request open that long through
+    // Cloudflare's edge (when routed via ai-router) isn't something to
+    // rely on. "startDeploy" kicks it off and returns immediately;
+    // callers poll `deployStatus` on their own timer.
+
+    func macWifiSSID(settings: AppSettings) async -> Result<String?, AIGatewayError> {
+        switch await callDeployAction("wifi_status", settings: settings) {
+        case .success(let json):
+            return .success(json["ssid"] as? String)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func startDeploy(settings: AppSettings) async -> Result<Void, AIGatewayError> {
+        switch await callDeployAction("start_deploy", settings: settings) {
+        case .success:
+            return .success(())
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func deployStatus(settings: AppSettings) async -> Result<MacDeployStatusInfo, AIGatewayError> {
+        switch await callDeployAction("deploy_status", settings: settings) {
+        case .success(let json):
+            let status = MacDeployStatus(rawValue: (json["status"] as? String) ?? "") ?? .idle
+            return .success(MacDeployStatusInfo(status: status, logTail: json["log_tail"] as? String))
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    // Shared by all three calls above — unlike summarize/download,
+    // every mac_deploy response is just a flat, small JSON object, so
+    // there's no need for per-action response parsing beyond unwrapping
+    // whichever envelope ("output" from ai-router, "result" from
+    // ai-gateway directly) the call came back in.
+    private func callDeployAction(_ action: String, settings: AppSettings) async -> Result<[String: Any], AIGatewayError> {
+        guard let baseURL = Self.baseURL(from: settings) else {
+            return .failure(Self.gatewayConfigError(settings))
+        }
+
+        var request: URLRequest
+        if Self.isTokenMode(settings) {
+            let token = settings.aiGatewayToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            request = URLRequest(url: baseURL.appendingPathComponent("v1/invoke"))
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "service": "local.deploy",
+                "options": ["action": action],
+            ])
+        } else {
+            guard Self.hasGatewayCredentials(settings) else {
+                return .failure(Self.gatewayConfigError(settings))
+            }
+            let tokenResult = await token(baseURL: baseURL, settings: settings)
+            guard case .success(let accessToken) = tokenResult else {
+                if case .failure(let error) = tokenResult { return .failure(error) }
+                return .failure(.decoding)
+            }
+            request = URLRequest(url: baseURL.appendingPathComponent("invoke"))
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "service_id": "mac_deploy",
+                "params": ["action": action],
+            ])
+        }
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            return .failure(.network(error))
+        }
+
+        guard let http = response as? HTTPURLResponse,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(.decoding)
+        }
+        if http.statusCode == 401 { return .failure(.unauthorized) }
+        guard (200...299).contains(http.statusCode) else {
+            let message = (json["message"] as? String) ?? (json["error"] as? String) ?? "Request failed (\(http.statusCode))."
+            return .failure(.server(message))
+        }
+
+        return .success((json["output"] as? [String: Any]) ?? (json["result"] as? [String: Any]) ?? json)
     }
 }

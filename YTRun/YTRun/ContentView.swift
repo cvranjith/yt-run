@@ -87,6 +87,9 @@ struct ContentView: View {
                         MenuTile(title: "Downloads", systemImage: "arrow.down.circle.fill", color: .blue) {
                             DownloadsView()
                         }
+                        MenuTile(title: "Update App", systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
+                            DeployView()
+                        }
                     }
 
                     MenuTile(title: "Settings", systemImage: "gearshape.fill", color: .gray, fullWidth: true) {
