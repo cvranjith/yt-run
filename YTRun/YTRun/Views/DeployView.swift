@@ -15,8 +15,7 @@ struct DeployView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var aiGatewayClient: AIGatewayClient
 
-    @State private var wifiInfo: MacWifiInfo?
-    @State private var isCheckingWifi = false
+    @State private var isChecking = false
     @State private var isShowingConfirmation = false
     @State private var isDeploying = false
     @State private var liveLog = ""
@@ -29,41 +28,22 @@ struct DeployView: View {
     private static let maxWaitSeconds: TimeInterval = 20 * 60
     private static let pollIntervalNanoseconds: UInt64 = 3_000_000_000
 
-    private var canDeploy: Bool { wifiInfo?.proceedOK == true }
-
-    // When this running instance was actually installed — read
-    // straight off the app bundle's own creation date rather than
-    // tracked server-side, since `devicectl device install app`
-    // creates a fresh bundle directory on every install, and this
-    // needs no round trip (or server state that'd be lost on an
-    // ai-gateway restart) to know.
+    // When this running instance was actually installed. Reads the
+    // creation date of the *container* directory (one level above the
+    // .app bundle itself, e.g. .../Application/<UUID>/YTRun.app) —
+    // `installd` mints a fresh UUID directory on every install, so its
+    // creation date is a real install timestamp. The .app bundle's own
+    // files, by contrast, come from an extracted archive and reported
+    // 1 Jan 1970 in practice — their dates don't reflect when this
+    // install actually happened, just whatever the archive recorded.
     private static var installDate: Date? {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: Bundle.main.bundlePath)
+        let containerURL = Bundle.main.bundleURL.deletingLastPathComponent()
+        let attrs = try? FileManager.default.attributesOfItem(atPath: containerURL.path)
         return attrs?[.creationDate] as? Date
     }
 
     var body: some View {
         Form {
-            Section {
-                if isCheckingWifi {
-                    HStack {
-                        ProgressView()
-                        Text("Checking…")
-                    }
-                } else if !canDeploy {
-                    // Only shown when there's actually something to act
-                    // on — once ready, this row would just be noise.
-                    Label(notReadyMessage, systemImage: "wifi.exclamationmark")
-                        .foregroundStyle(.orange)
-                }
-                Button("Refresh") {
-                    Task { await checkWifi() }
-                }
-                .disabled(isCheckingWifi || isDeploying)
-            } footer: {
-                Text("A deploy needs this phone on the same Wi-Fi as your Mac mini, and paired with it for wireless installs — checked directly against the Mac rather than guessed from Wi-Fi alone.")
-            }
-
             Section {
                 if let installDate = Self.installDate {
                     HStack {
@@ -73,16 +53,20 @@ struct DeployView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                if isDeploying {
+                if isChecking {
+                    HStack {
+                        ProgressView()
+                        Text("Checking…")
+                    }
+                } else if isDeploying {
                     HStack {
                         ProgressView()
                         Text("Updating…")
                     }
                 } else {
                     Button("Update App") {
-                        isShowingConfirmation = true
+                        Task { await beginUpdateFlow() }
                     }
-                    .disabled(!canDeploy)
                 }
                 // Stays visible after finishing too (until the next tap
                 // clears it) — a failure's alert just says "see the log
@@ -102,10 +86,7 @@ struct DeployView: View {
         }
         .navigationTitle("Update App")
         .onAppear {
-            Task {
-                await checkWifi()
-                await resumeIfAlreadyRunning()
-            }
+            Task { await resumeIfAlreadyRunning() }
         }
         .confirmationDialog(
             "Update the app now?",
@@ -129,21 +110,23 @@ struct DeployView: View {
         }
     }
 
-    private var notReadyMessage: String {
-        if let ssid = wifiInfo?.ssid {
-            return "Not ready — try switching to Wi-Fi: \(ssid)"
-        }
-        return "Not ready — make sure this phone is on the same Wi-Fi as your Mac mini and it's paired for wireless installs."
-    }
-
-    private func checkWifi() async {
-        isCheckingWifi = true
-        defer { isCheckingWifi = false }
-        switch await aiGatewayClient.macWifiStatus(settings: settings) {
+    // Checks readiness right when the button is tapped, rather than
+    // showing a persistent status row up front — the Mac's own
+    // pairing/reachability is what decides whether this can proceed at
+    // all (see mac_deploy's "proceed_ok"), so there's nothing useful to
+    // show until the moment it actually matters.
+    private func beginUpdateFlow() async {
+        isChecking = true
+        let readiness = await aiGatewayClient.macWifiStatus(settings: settings)
+        isChecking = false
+        switch readiness {
         case .success(let info):
-            wifiInfo = info
+            if info.proceedOK {
+                isShowingConfirmation = true
+            } else {
+                resultMessage = "Not paired — move to the same Wi-Fi as your Mac mini and try again."
+            }
         case .failure(let error):
-            wifiInfo = nil
             resultMessage = error.message
         }
     }
