@@ -12,10 +12,12 @@ struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var aiGatewayClient: AIGatewayClient
+    @EnvironmentObject var webViewStore: YouTubeWebViewStore
 
     @State private var showingResetConfirmation = false
     @State private var isTestingConnection = false
     @State private var connectionTestMessage: String?
+    @State private var showingClearDataConfirmation = false
 
     var body: some View {
         // Form gives us the standard iOS Settings-app look (grouped rows)
@@ -161,6 +163,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Button("Clear YouTube Data", role: .destructive) {
+                    showingClearDataConfirmation = true
+                }
+            } footer: {
+                Text("Signs you out of YouTube in the app (if signed in) and resets anything YouTube remembers client-side — including a stuck autoplay-unmuted preference, if that happens again.")
+            }
+
+            Section {
                 Button("Reset today's usage", role: .destructive) {
                     showingResetConfirmation = true
                 }
@@ -196,6 +206,18 @@ struct SettingsView: View {
                 usageTracker.resetToday()
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "Clear YouTube data?",
+            isPresented: $showingClearDataConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Data", role: .destructive) {
+                webViewStore.clearWebsiteData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This signs you out of YouTube in the app and resets anything it remembers client-side.")
         }
         .alert("AI Gateway", isPresented: Binding(
             get: { connectionTestMessage != nil },
@@ -246,4 +268,5 @@ struct SettingsView: View {
     .environmentObject(AppSettings())
     .environmentObject(UsageTracker())
     .environmentObject(AIGatewayClient())
+    .environmentObject(YouTubeWebViewStore())
 }

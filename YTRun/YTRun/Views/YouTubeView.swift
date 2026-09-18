@@ -56,11 +56,35 @@ struct YouTubeView: View {
     // revisiting a video already checked this session doesn't repeat
     // the lookup.
     @State private var captionsAvailable = true
-    @State private var captionsAvailabilityCache: [String: Bool] = [:]
+    // Single-slot, not a growing per-video-ID dictionary — same reasoning
+    // as the transcript/summary caches elsewhere (DownloadManager,
+    // AIGatewayClient, ChatGPTShortcutBridge): only ever holds the
+    // *current* video's result, replaced (not added to) on every video
+    // change, so nothing accumulates for the life of the app session.
+    @State private var captionsAvailabilityCacheVideoID: String?
+    @State private var captionsAvailabilityCacheValue: Bool?
 
     private var isLocked: Bool {
         usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
             || usageTracker.isInCooldown
+    }
+
+    // Drives what the leading control-bar button does: while watching
+    // a specific video, it takes you to YouTube's home feed (matching
+    // what tapping "Home" in YouTube's own app does); anywhere else
+    // (the feed itself, search results, a channel page, ...) it falls
+    // back to leaving this screen entirely, with a different icon so
+    // the two aren't confused.
+    //
+    // Checking for the *absence* of a video ID (the same
+    // `DownloadManager.videoID(from:)` already used to gate
+    // captions/summarize) rather than matching the feed's exact URL
+    // shape — that URL isn't reliably just a bare "/" (redirects, query
+    // params), so path-matching against it was fragile; "not currently
+    // watching a video" is both simpler and matches what this button
+    // should actually do everywhere that isn't a watch page.
+    private var isOnYouTubeHomeFeed: Bool {
+        DownloadManager.videoID(from: webViewStore.currentURL) == nil
     }
 
     var body: some View {
@@ -69,14 +93,19 @@ struct YouTubeView: View {
                 LockedView()
             } else {
                 VStack(spacing: 0) {
+                    YouTubeWebView(store: webViewStore)
+                    // Bottom toolbar, like a normal iPhone app footer,
+                    // rather than sitting up top where it used to.
                     // Hidden in DIY fullscreen (see `YouTubeWebViewStore
-                    // .isCustomFullscreen`) so neither eats into the
+                    // .isCustomFullscreen`) so it doesn't eat into the
                     // expanded player's space.
                     if !webViewStore.isCustomFullscreen {
-                        controlBar
+                        if downloadManager.isDownloading {
+                            downloadProgressBar
+                        }
                         statusBar
+                        controlBar
                     }
-                    YouTubeWebView(store: webViewStore)
                 }
                 // A repeating timer, not tied to WKWebView at all — every
                 // second, if the page told us it's playing, add one second
@@ -145,12 +174,15 @@ struct YouTubeView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         // Let the web content run under the status bar/notch area too,
-        // since the page has its own chrome. In DIY fullscreen, ignore
-        // every edge instead of just the bottom, and hide the system
-        // status bar too — the expanded player (see
+        // since the page has its own chrome — the toolbar is now at the
+        // bottom (see body), so it's the *top* edge that's free to be
+        // ignored here, not the bottom (which the toolbar should sit
+        // above, clear of the home indicator, like a normal footer). In
+        // DIY fullscreen, ignore every edge instead, and hide the
+        // system status bar too — the expanded player (see
         // `forceElementFullscreenJS`) should fill the whole screen with
         // nothing else competing for space.
-        .ignoresSafeArea(edges: webViewStore.isCustomFullscreen ? .all : .bottom)
+        .ignoresSafeArea(edges: webViewStore.isCustomFullscreen ? .all : .top)
         .statusBarHidden(webViewStore.isCustomFullscreen)
         .sheet(isPresented: $isShowingURLEntry) {
             openURLSheet
@@ -247,11 +279,15 @@ struct YouTubeView: View {
     private var controlBar: some View {
         HStack(spacing: 18) {
             Button {
-                dismiss()
+                if isOnYouTubeHomeFeed {
+                    dismiss()
+                } else {
+                    webViewStore.forceLoad(Self.homeURL)
+                }
             } label: {
-                Image(systemName: "house")
+                Image(systemName: isOnYouTubeHomeFeed ? "house.fill" : "house")
             }
-            .accessibilityLabel("Home")
+            .accessibilityLabel(isOnYouTubeHomeFeed ? "Back to App Home" : "YouTube Home")
 
             Button {
                 webViewStore.goBack()
@@ -307,12 +343,15 @@ struct YouTubeView: View {
 
             Menu {
                 Button {
-                    Task { await performDownload() }
+                    Task { await performDownload(kind: .video) }
                 } label: {
-                    Label(
-                        settings.listenModeEnabled ? "Download Audio" : "Download Video",
-                        systemImage: "arrow.down.circle"
-                    )
+                    Label("Download Video", systemImage: "video")
+                }
+
+                Button {
+                    Task { await performDownload(kind: .audio) }
+                } label: {
+                    Label("Download Audio Only", systemImage: "waveform")
                 }
 
                 Button {
@@ -390,6 +429,32 @@ struct YouTubeView: View {
         .background(.bar)
     }
 
+    // Only shown while a download is actually in flight. A linear
+    // `ProgressView(value:)` rather than trying to cram a percentage
+    // into the small toolbar icon — `downloadManager.downloadProgress`
+    // stays 0 (falls back to an indeterminate bar) if the server
+    // response never included a Content-Length to compute a fraction
+    // from, which is out of our control.
+    private var downloadProgressBar: some View {
+        VStack(spacing: 2) {
+            if downloadManager.downloadProgress > 0 {
+                ProgressView(value: downloadManager.downloadProgress)
+                Text("Downloading… \(Int(downloadManager.downloadProgress * 100))%")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView()
+                Text("Downloading…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .progressViewStyle(.linear)
+        .padding(.horizontal)
+        .padding(.bottom, 6)
+        .background(.bar)
+    }
+
     // A `.sheet` is a modal card that slides up from the bottom — the
     // standard iOS way to ask for a small piece of input without leaving
     // the current screen.
@@ -431,16 +496,26 @@ struct YouTubeView: View {
         .presentationDetents([.medium])
     }
 
-    // Downloads whatever's currently loaded — audio-only when Listen
-    // Mode is on (matching what you're actually consuming), the full
-    // video otherwise. See `DownloadManager`/`downloadInfoJS` for why
-    // this doesn't work for every video.
-    private func performDownload() async {
-        guard let info = await webViewStore.fetchDownloadInfo() else {
-            downloadResultMessage = DownloadError.noStreamAvailable.message
+    // Downloads whatever's currently loaded — the caller (an explicit
+    // "Download Video" or "Download Audio Only" menu tap) picks which,
+    // independent of whether Listen Mode happens to be on. Resolves the
+    // actual download URL server-side via ai-gateway's youtube_download
+    // service (see `AIGatewayClient.resolveDownloadURL`) rather than
+    // scraping the page — works for effectively any video, not just the
+    // subset the old WebView-scraping approach could reach.
+    private func performDownload(kind: AIGatewayDownloadKind) async {
+        guard let videoID = DownloadManager.videoID(from: webViewStore.currentURL) else {
+            downloadResultMessage = "Couldn't tell which video this is — try again once the page has fully loaded."
             return
         }
-        let result = await downloadManager.download(info: info, audioOnly: settings.listenModeEnabled)
+        let info = await webViewStore.fetchDownloadInfo()
+        let result = await downloadManager.download(
+            videoID: videoID,
+            kind: kind,
+            title: info?.title ?? "Video",
+            aiGatewayClient: aiGatewayClient,
+            settings: settings
+        )
         switch result {
         case .success(let url):
             downloadResultMessage = "Saved as \(url.lastPathComponent)."
@@ -459,14 +534,15 @@ struct YouTubeView: View {
             captionsAvailable = false
             return
         }
-        if let cached = captionsAvailabilityCache[videoID] {
+        if videoID == captionsAvailabilityCacheVideoID, let cached = captionsAvailabilityCacheValue {
             captionsAvailable = cached
             return
         }
         captionsAvailable = true
         Task {
             let available = await downloadManager.hasCaptions(videoID: videoID)
-            captionsAvailabilityCache[videoID] = available
+            captionsAvailabilityCacheVideoID = videoID
+            captionsAvailabilityCacheValue = available
             // Only apply if still on the same video — a quick nav away
             // and back shouldn't let a slower, now-stale check clobber
             // whatever the more recent one already decided.

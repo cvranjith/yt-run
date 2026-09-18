@@ -74,10 +74,21 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         configuration.websiteDataStore = .default()
 
         // Let <video> play inline instead of forcing iOS's native
-        // fullscreen player, and don't require a user tap before JS can
-        // start playback — needed so our lock-screen play button can
-        // resume the video programmatically.
+        // fullscreen player.
         configuration.allowsInlineMediaPlayback = true
+
+        // Don't require a user tap before JS can start playback —
+        // needed so our lock-screen play button can resume the video
+        // programmatically.
+        //
+        // Tried `.all` here to stop YouTube's autoplay-on-load (the
+        // actual ask was for videos to open paused, not autoplaying).
+        // It didn't work — YouTube's autoplay still happened regardless
+        // — and it broke YouTube's own muted-autoplay fallback in the
+        // process (autoplay became audible instead of silent), a
+        // straight regression with none of the intended benefit. Back
+        // to `[]`: autoplaying muted (YouTube's own default behavior)
+        // is the accepted trade-off for now.
         configuration.mediaTypesRequiringUserActionForPlayback = []
 
         // Make YouTube's fullscreen button use the DOM Fullscreen API
@@ -197,6 +208,43 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         guard lastLoadedURL != url else { return }
         lastLoadedURL = url
         webView.load(URLRequest(url: url))
+    }
+
+    // Same as `load(_:)` but skips its same-URL dedup check — for an
+    // explicit user action (the control bar's "YouTube Home" button)
+    // that must always actually navigate. `lastLoadedURL` only tracks
+    // URLs *we've* explicitly loaded from Swift, so it goes stale the
+    // moment the user taps into a video via YouTube's own in-page
+    // (SPA/pushState) navigation — `load(_:)` would then wrongly think
+    // "already there" and silently no-op if that stale value happened
+    // to already equal `url` (e.g. `lastLoadedURL` still says the home
+    // feed from the very first load, even though the page has long
+    // since moved on to a video).
+    func forceLoad(_ url: URL) {
+        lastLoadedURL = url
+        webView.load(URLRequest(url: url))
+    }
+
+    // Wipes cookies/localStorage/etc. for youtube.com only (not the
+    // whole persistent data store) and reloads fresh. Signs out of
+    // YouTube in the app if you were signed in, and resets anything
+    // YouTube itself remembers client-side (including, notably, a
+    // stuck "autoplay unmuted" preference a video's volume/mute state
+    // can persist once set — this is the fix for that, since there's
+    // no more targeted API to clear just one such preference).
+    func clearWebsiteData(completion: @escaping () -> Void = {}) {
+        let dataStore = WKWebsiteDataStore.default()
+        dataStore.fetchDataRecords(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes()) { [weak self] records in
+            let youtubeRecords = records.filter { $0.displayName.contains("youtube") }
+            dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), for: youtubeRecords) {
+                DispatchQueue.main.async {
+                    guard let self else { completion(); return }
+                    self.lastLoadedURL = nil
+                    self.forceLoad(Self.homeURL)
+                    completion()
+                }
+            }
+        }
     }
 
     func pause() {

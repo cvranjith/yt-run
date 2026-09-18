@@ -11,37 +11,46 @@ import UIKit
 // ai-gateway/AIGatewayClient at all — instead of a server call, it
 // hands a fully-formed prompt+transcript to the user's own ChatGPT
 // iPhone app via a Shortcut (see chatgpt-shortcut-setup.md for the
-// exact Shortcut to build), using the clipboard as the payload channel
-// and iOS's x-callback-url support in the Shortcuts app to return
-// control here automatically. Confirmed working on-device — see
+// exact Shortcut to build), using this app's own App Intents (see
+// `ChatGPTShortcutIntents.swift`/`TranscriptExchange`) as the payload
+// channel and iOS's x-callback-url support in the Shortcuts app to
+// return control here automatically. Confirmed working on-device — see
 // requirement-ai-chatgpt.md for the original design.
 //
-// The Shortcut itself is deliberately generic/dumb (Get Clipboard ->
-// Ask ChatGPT [Message = Clipboard] -> Copy to Clipboard) — the actual
-// prompt lives in `buildPayload` below, not hardcoded in the Shortcut,
-// so it can change without the user having to edit anything on-device.
+// Originally used the system clipboard for the payload/result, which
+// worked but triggered two unavoidable "Allow Paste" prompts per run
+// (an iOS privacy control apps cannot suppress or pre-authorize).
+// Switched to App Intents instead: Shortcuts passes values between
+// actions through its own execution engine, never the pasteboard, so
+// a Shortcut that calls this app's own "Get Pending Transcript" /
+// "Save Summary" actions (instead of "Get Clipboard/Copy to
+// Clipboard") never touches the pasteboard at all - no prompts.
+//
+// The Shortcut itself is still deliberately generic/dumb (Get Pending
+// Transcript -> Ask ChatGPT [Message = that output] -> Save Summary)
+// — the actual prompt lives in `buildPayload` below, not hardcoded in
+// the Shortcut, so it can change without the user having to edit
+// anything on-device.
 //
 // Flow:
-//   1. start(payload:shortcutName:videoID:length:) copies `payload` to
-//      the clipboard (videoID/length are just remembered for caching —
-//      see `cachedSummary`/`cachePendingResult` — not sent anywhere),
-//      then opens `shortcuts://x-callback-url/run-shortcut?...` with
-//      input=clipboard and x-success/x-cancel/x-error all pointing back
-//      at this app's own "ytrun://chatgpt-summary/<status>" URL scheme.
-//   2. iOS switches to the Shortcuts app, which runs the named Shortcut
-//      (reads the clipboard, asks ChatGPT, copies its reply back to
-//      the clipboard) and then follows the x-success URL back here.
-//      Along the way, iOS shows two "Allow Paste" prompts (Shortcut
-//      reading the app's payload, this app reading the reply back) —
-//      that's an iOS privacy control apps cannot suppress or
-//      pre-authorize, not something wrong with this flow.
+//   1. start(payload:shortcutName:videoID:length:) stores `payload` in
+//      `TranscriptExchange.pendingPayload` (videoID/length are just
+//      remembered for caching — see `cachedSummary`/
+//      `cachePendingResult` — not sent anywhere), then opens
+//      `shortcuts://x-callback-url/run-shortcut?...` with x-success/
+//      x-cancel/x-error all pointing back at this app's own
+//      "ytrun://chatgpt-summary/<status>" URL scheme.
+//   2. iOS switches to the Shortcuts app, which runs the named
+//      Shortcut (calls this app's "Get Pending Transcript" App Intent,
+//      asks ChatGPT, calls "Save Summary" with the reply) and then
+//      follows the x-success URL back here.
 //   3. YTRunApp's `.onOpenURL` forwards that URL to `handle(url:)`,
-//      which reads the clipboard as the result.
+//      which reads `TranscriptExchange.receivedSummary` as the result.
 //
-// `pasteManually()` is the recovery path: if step 2/3 never happens
-// (the Shortcut stayed open somewhere instead of calling back), the
-// user can switch back to this app themselves and tap "Paste From
-// Clipboard".
+// `checkForResultManually()` is the recovery path: if step 2/3 never
+// happens (the Shortcut stayed open somewhere instead of calling
+// back), the user can switch back to this app themselves and tap
+// "Check for Result" to see if "Save Summary" already ran anyway.
 final class ChatGPTShortcutBridge: ObservableObject {
     enum State: Equatable {
         case idle
@@ -65,7 +74,6 @@ final class ChatGPTShortcutBridge: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var log: [LogEntry] = []
-    private var lastPayload: String?
     // Which video/length the in-flight (or most recently finished) run
     // was actually for — set in `start()`, consulted when a result
     // shows up (either via `handle(url:)` or `pasteManually()`) so it
@@ -148,10 +156,10 @@ final class ChatGPTShortcutBridge: ObservableObject {
     func start(payload: String, shortcutName: String, videoID: String, length: AIGatewaySummaryLength) {
         pendingVideoID = videoID
         pendingLength = length
-        lastPayload = payload
         state = .buildingPayload
-        appendLog("Copying payload to clipboard (\(payload.count) characters)")
-        UIPasteboard.general.string = payload
+        appendLog("Set pending transcript (\(payload.count) characters)")
+        TranscriptExchange.pendingPayload = payload
+        TranscriptExchange.receivedSummary = nil
 
         guard let url = Self.shortcutURL(name: shortcutName) else {
             appendLog("Failed to build the shortcuts:// URL")
@@ -186,33 +194,30 @@ final class ChatGPTShortcutBridge: ObservableObject {
         case "error":
             state = .failed("The Shortcut reported an error (x-error).")
         default:
-            let clipboard = UIPasteboard.general.string ?? ""
-            if clipboard.isEmpty {
-                state = .failed("Returned from the Shortcut, but the clipboard is empty.")
-            } else if clipboard == lastPayload {
-                state = .failed("Clipboard still has the original transcript — the Shortcut likely didn't run, or didn't copy a new result.")
+            if let summary = TranscriptExchange.receivedSummary, !summary.isEmpty {
+                state = .received(summary)
+                cachePendingResult(summary)
             } else {
-                state = .received(clipboard)
-                cachePendingResult(clipboard)
+                state = .failed("Returned from the Shortcut, but \"Save Summary\" was never called — check the Shortcut's last action.")
             }
         }
         appendLog("State -> \(state)")
         return true
     }
 
-    // FR-5 recovery path — for when the Shortcut finished but never
+    // Recovery path — for when the Shortcut finished but never
     // actually triggered the x-success callback (e.g. it left the
     // ChatGPT app open in the foreground instead of returning here).
-    func pasteManually() {
-        let clipboard = UIPasteboard.general.string ?? ""
-        appendLog("Manual paste read \(clipboard.count) characters from clipboard")
-        if clipboard.isEmpty {
-            state = .failed("Clipboard is empty.")
-        } else if clipboard == lastPayload {
-            state = .failed("Clipboard still has the original transcript, not a summary.")
+    // Just re-checks the same store the automatic path reads, in case
+    // "Save Summary" ran but the callback that was supposed to follow
+    // it didn't.
+    func checkForResultManually() {
+        appendLog("Manually checking for a result")
+        if let summary = TranscriptExchange.receivedSummary, !summary.isEmpty {
+            state = .received(summary)
+            cachePendingResult(summary)
         } else {
-            state = .received(clipboard)
-            cachePendingResult(clipboard)
+            state = .failed("No result found yet — \"Save Summary\" may not have run.")
         }
     }
 
@@ -227,7 +232,6 @@ final class ChatGPTShortcutBridge: ObservableObject {
 
     func reset() {
         state = .idle
-        lastPayload = nil
         appendLog("Reset")
     }
 
@@ -242,7 +246,10 @@ final class ChatGPTShortcutBridge: ObservableObject {
         var components = URLComponents(string: "shortcuts://x-callback-url/run-shortcut")
         components?.queryItems = [
             URLQueryItem(name: "name", value: name),
-            URLQueryItem(name: "input", value: "clipboard"),
+            // No `input=` here - the Shortcut sources the transcript
+            // itself via YTRun's own "Get Pending Transcript" App
+            // Intent as its first action, not from whatever's passed
+            // as this run's input.
             URLQueryItem(name: "x-success", value: "\(callbackScheme)://\(callbackHost)/success"),
             URLQueryItem(name: "x-cancel", value: "\(callbackScheme)://\(callbackHost)/cancel"),
             URLQueryItem(name: "x-error", value: "\(callbackScheme)://\(callbackHost)/error"),

@@ -92,8 +92,8 @@ struct ChatGPTSummaryDebugView: View {
                         }
                     }
                     if case .awaitingShortcut = bridge.state {
-                        Button("Paste From Clipboard Instead") {
-                            bridge.pasteManually()
+                        Button("Check for Result") {
+                            bridge.checkForResultManually()
                         }
                         .font(.caption)
                     }

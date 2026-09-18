@@ -13,6 +13,12 @@ struct LockedView: View {
     // all need the same shared state.
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
+    // The YouTube screen hides the native back button throughout (see
+    // `YouTubeView`'s own custom Home button), and this view replaces
+    // that screen's content entirely while locked — so without this,
+    // being locked leaves no way back to Home/Settings at all except
+    // force-quitting the app.
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(spacing: 20) {
@@ -31,10 +37,20 @@ struct LockedView: View {
             // A run either ends an active cooldown early, or tops up the
             // daily allowance — never both from the same run. See
             // `UsageTracker.completeRun`.
-            NavigationLink("Start a Run") {
-                RunView()
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "house")
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Home")
+
+                NavigationLink("Start a Run") {
+                    RunView()
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
 
             // Hidden unless explicitly turned on in Settings — this
             // bypasses the actual run (no GPS/distance/duration check at

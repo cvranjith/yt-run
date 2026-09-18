@@ -42,18 +42,16 @@ enum CaptionFormat {
 
 enum DownloadError: Error {
     case alreadyInProgress
-    case noStreamAvailable
     case noCaptionsAvailable
     case network(Error)
     case fileSystem(Error)
     case emptyOrTruncated
+    case gateway(AIGatewayError)
 
     var message: String {
         switch self {
         case .alreadyInProgress:
             return "A download is already in progress."
-        case .noStreamAvailable:
-            return "This video's stream isn't available for direct download — YouTube may have protected it."
         case .noCaptionsAvailable:
             return "No usable captions were found for this video."
         case .network(let error):
@@ -62,6 +60,8 @@ enum DownloadError: Error {
             return "Couldn't save the file: \(error.localizedDescription)"
         case .emptyOrTruncated:
             return "The download came back empty or incomplete, so it wasn't saved. This can happen if YouTube's stream link expired mid-download — try again."
+        case .gateway(let error):
+            return error.message
         }
     }
 }
@@ -92,6 +92,12 @@ struct DownloadedFile: Identifiable {
 @MainActor
 final class DownloadManager: ObservableObject {
     @Published private(set) var isDownloading = false
+    // 0...1, meaningful only while `isDownloading` — drives the
+    // progress bar in YouTubeView. Reported by `DownloadTaskCoordinator`
+    // below, which only knows the total size once the server actually
+    // sends a Content-Length — before that (or if it never does), this
+    // just stays at 0 and the UI falls back to an indeterminate spinner.
+    @Published private(set) var downloadProgress: Double = 0
 
     static let downloadsDirectory: URL = {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -100,37 +106,51 @@ final class DownloadManager: ObservableObject {
         return downloads
     }()
 
-    func download(info: DownloadInfo, audioOnly: Bool) async -> Result<URL, DownloadError> {
+    // Resolves a direct download URL via ai-gateway's youtube_download
+    // service (see `AIGatewayClient.resolveDownloadURL`), then downloads
+    // it directly from YouTube's own CDN — no video bytes ever pass
+    // through the gateway. Replaces the old approach of scraping
+    // `ytInitialPlayerResponse` in the WebView for an unciphered stream
+    // URL, which only worked for a subset of videos; yt-dlp server-side
+    // resolves a working URL for effectively any video.
+    func download(
+        videoID: String,
+        kind: AIGatewayDownloadKind,
+        title fallbackTitle: String,
+        aiGatewayClient: AIGatewayClient,
+        settings: AppSettings
+    ) async -> Result<URL, DownloadError> {
         guard !isDownloading else { return .failure(.alreadyInProgress) }
-        guard let sourceURL = audioOnly ? info.audioURL : info.videoURL else {
-            return .failure(.noStreamAvailable)
-        }
 
         isDownloading = true
-        defer { isDownloading = false }
+        downloadProgress = 0
+        defer {
+            isDownloading = false
+            downloadProgress = 0
+        }
 
-        var request = URLRequest(url: sourceURL)
-        if let userAgent = info.userAgent {
-            request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        let resolved: AIGatewayDownloadInfo
+        switch await aiGatewayClient.resolveDownloadURL(videoID: videoID, kind: kind, settings: settings) {
+        case .success(let info):
+            resolved = info
+        case .failure(let error):
+            return .failure(.gateway(error))
+        }
+
+        let coordinator = DownloadTaskCoordinator { [weak self] fraction in
+            self?.downloadProgress = fraction
         }
 
         let tempURL: URL
-        let response: URLResponse
         do {
-            (tempURL, response) = try await URLSession.shared.download(for: request)
+            tempURL = try await coordinator.start(request: URLRequest(url: resolved.url))
         } catch {
             return .failure(.network(error))
         }
 
-        // Guards against a download that "succeeds" (a 200/206 response,
-        // no thrown error) but produces an unusably small file — seen in
-        // practice with an earlier, since-removed sniffed-URL fallback
-        // that sometimes pointed at just a small chunk of the track
-        // rather than the whole thing. Any real audio/video track is
-        // comfortably larger than this even at the lowest bitrates,
-        // whereas an empty or single-fragment response is not — so
-        // rather than silently reporting success on a file that won't
-        // actually play, this fails clearly instead.
+        // Same sanity check as before: a "successful" response that's
+        // actually empty/truncated (e.g. the resolved URL expired mid-
+        // download) shouldn't be reported as a saved file.
         let minimumValidBytes: Int64 = 32 * 1024
         let downloadedSize = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? nil
         guard let size = downloadedSize, size >= minimumValidBytes else {
@@ -138,8 +158,10 @@ final class DownloadManager: ObservableObject {
             return .failure(.emptyOrTruncated)
         }
 
-        let ext = Self.fileExtension(mimeType: response.mimeType, audioOnly: audioOnly)
-        let destinationURL = Self.uniqueDestinationURL(title: info.title, extension: ext)
+        let destinationURL = Self.uniqueDestinationURL(
+            title: resolved.title.isEmpty ? fallbackTitle : resolved.title,
+            extension: resolved.ext
+        )
         do {
             try FileManager.default.moveItem(at: tempURL, to: destinationURL)
         } catch {
@@ -188,7 +210,21 @@ final class DownloadManager: ObservableObject {
         return !tracks.isEmpty
     }
 
+    // Scoped to just the current video, same reasoning as
+    // AIGatewayClient/ChatGPTShortcutBridge's summary caches — avoids
+    // an unnecessary repeat trip to YouTube's INNERTUBE API when the
+    // same video's transcript is asked for more than once in a row
+    // (View Captions, then Summarize via ChatGPT, then a different
+    // length, etc.), without needing any cache eviction: moving to a
+    // different video just replaces it.
+    private var cachedTranscriptVideoID: String?
+    private var cachedTranscriptEvents: [CaptionEvent]?
+
     func fetchCaptionEvents(videoID: String) async -> Result<[CaptionEvent], DownloadError> {
+        if videoID == cachedTranscriptVideoID, let cached = cachedTranscriptEvents {
+            return .success(cached)
+        }
+
         guard let apiKey = await Self.fetchInnertubeAPIKey(videoID: videoID) else {
             return .failure(.noCaptionsAvailable)
         }
@@ -218,6 +254,8 @@ final class DownloadManager: ObservableObject {
             return CaptionEvent(startMs: event.tStartMs, durationMs: event.dDurationMs, text: text)
         }
         guard !events.isEmpty else { return .failure(.noCaptionsAvailable) }
+        cachedTranscriptVideoID = videoID
+        cachedTranscriptEvents = events
         return .success(events)
     }
 
@@ -432,16 +470,6 @@ final class DownloadManager: ObservableObject {
 
     // MARK: - Filename
 
-    private static func fileExtension(mimeType: String?, audioOnly: Bool) -> String {
-        switch mimeType {
-        case "video/mp4": return "mp4"
-        case "video/webm": return "webm"
-        case "audio/mp4": return "m4a"
-        case "audio/webm": return "weba"
-        default: return audioOnly ? "m4a" : "mp4"
-        }
-    }
-
     private static let invalidFilenameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
 
     // Sanitizes the video title into a filesystem-safe name, truncated so
@@ -461,5 +489,67 @@ final class DownloadManager: ObservableObject {
 
         let suffix = String(UUID().uuidString.prefix(6))
         return downloadsDirectory.appendingPathComponent("\(sanitized) (\(suffix)).\(ext)")
+    }
+}
+
+// Reports fractional download progress for `URLSession.download(for:
+// delegate:)` — `didWriteData` is called throughout the download,
+// independent of the async call's own return (which still resolves
+// normally once the transfer finishes; this delegate has nothing to do
+// there beyond satisfying the protocol's required method).
+// Drives one download via a dedicated `URLSession` + classic delegate
+// callbacks, bridged back to async/await with a continuation — the
+// older, thoroughly battle-tested pattern for tracking download
+// progress, used here instead of the newer `URLSession.download(for:
+// delegate:)` convenience API (tried first) since that gave no visible
+// progress in practice. `didFinishDownloadingTo` must move the file
+// itself: the temp location it's handed is deleted the moment that
+// method returns.
+private final class DownloadTaskCoordinator: NSObject, URLSessionDownloadDelegate {
+    private let onProgress: (Double) -> Void
+    private var continuation: CheckedContinuation<URL, Error>?
+
+    init(onProgress: @escaping (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func start(request: URLRequest) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            self.continuation = continuation
+            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+            session.downloadTask(with: request).resume()
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        DispatchQueue.main.async { [onProgress] in
+            onProgress(fraction)
+        }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        let movedURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try FileManager.default.moveItem(at: location, to: movedURL)
+            continuation?.resume(returning: movedURL)
+        } catch {
+            continuation?.resume(throwing: error)
+        }
+        continuation = nil
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            continuation?.resume(throwing: error)
+            continuation = nil
+        }
     }
 }

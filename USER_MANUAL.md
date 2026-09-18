@@ -105,61 +105,52 @@ setup step is the fiddly part, so follow it exactly.
 
 The Shortcut is deliberately dumb — it doesn't contain any prompt or
 know anything about "short/paragraph/detailed." YTRun builds the full
-prompt + video transcript and puts it on the clipboard before opening
-the Shortcut; the Shortcut just relays clipboard in, ChatGPT reply out.
+prompt + video transcript and hands it over via its own "Get Pending
+Transcript" action; the Shortcut asks ChatGPT with that, then hands
+the reply back via YTRun's "Save Summary" action. No clipboard
+involved — App Intents pass values through Shortcuts' own execution
+engine, which is also why this doesn't trigger any "Allow Paste"
+prompts (an earlier clipboard-based version did, unavoidably).
 
 1. Open the **Shortcuts** app → **+** (top-right) → new shortcut.
 2. Tap the shortcut's title at the top and rename it to **exactly**
    match Settings → **ChatGPT Shortcut** in YTRun — default is
    **`YTRun Summarize`** (case-sensitive, must match exactly).
-3. **Add Action** → search **"Get Clipboard"** → add it.
+3. **Add Action** → search **"Get Pending Transcript"** → add it (appears
+   grouped under the YTRun app icon).
 4. **Add Action** → search **"ChatGPT"** → add **Ask ChatGPT**.
-   - Tap the **Message** field and insert the **Clipboard** variable
-     (the output of step 3) — do **not** type any prompt text here.
-     Nothing but that one variable chip should be in this field.
+   - Tap the **Message** field and insert the **Get Pending
+     Transcript** output variable — do **not** type any prompt text
+     here. Nothing but that one variable chip should be in this field.
    - **Start new chat**: **On**.
    - **Continuous chat**: **Off**.
    - **Show When Run**: **Off** (this is what lets it run without the
      ChatGPT app popping to the foreground — confirmed working).
-5. **Add Action** → search **"Copy to Clipboard"** → add it. Set its
-   content to the **Ask ChatGPT** action's response/output variable
-   (not the Clipboard variable from step 3).
+5. **Add Action** → search **"Save Summary"** (also under YTRun) → add
+   it. Set its **Summary** parameter to the **Ask ChatGPT** action's
+   response/output variable.
 6. Tap **Done**.
 
-That's the whole Shortcut — exactly 3 actions: **Get Clipboard → Ask
-ChatGPT (Message = Clipboard only) → Copy to Clipboard**.
+That's the whole Shortcut — exactly 3 actions: **Get Pending
+Transcript → Ask ChatGPT (Message = that output) → Save Summary**.
 
-### The two mistakes that are easy to make
+### The mistake that's easy to make
 
-- **Typing the prompt into "Ask ChatGPT" instead of inserting the
-  Clipboard variable.** If Message contains any typed text, the
-  transcript YTRun sends never reaches ChatGPT — you'll get a reply
-  like "please paste the transcript." Message must be *only* the
-  Clipboard variable chip.
-- **Using "Shortcut Input" instead of "Get Clipboard."** "Shortcut
-  Input" is only populated when something *explicitly* passes input —
-  YTRun's launch URL does this, but manually tapping the shortcut in
-  the Shortcuts app does **not**, so a standalone test would look
-  broken even though the real app flow works. "Get Clipboard" always
-  reads whatever is actually on the clipboard, regardless of how the
-  shortcut was started — use that, not "Shortcut Input."
+- **Typing the prompt into "Ask ChatGPT" instead of inserting the "Get
+  Pending Transcript" variable.** If Message contains any typed text,
+  the transcript YTRun sends never reaches ChatGPT — you'll get a
+  reply like "please paste the transcript." Message must be *only*
+  that one variable chip.
 
 ### Test it
 
-1. **Standalone** (isolates the Shortcut from the app): copy a short
-   paragraph of plain text anywhere, open Shortcuts, tap your shortcut
-   directly to run it. Expect two "Allow Paste" prompts (see below).
-   Paste afterward to confirm you got a different reply back.
-2. **From YTRun**: open a video with captions → Download menu →
-   **Summarize via ChatGPT** → pick a length → **Send to ChatGPT**. iOS
-   switches to Shortcuts briefly, then back to YTRun automatically with
-   the result.
-
-**About the "Allow Paste" prompts**: you'll see this twice per run
-(Shortcut reading YTRun's payload, then YTRun reading ChatGPT's reply
-back). This is an iOS system privacy control — apps cannot suppress or
-pre-authorize it, so there's no setting to make it permanent. It's the
-fixed cost of this approach, not a bug.
+There's no clean standalone test for this version (unlike the old
+clipboard-based one) — "Get Pending Transcript" only returns something
+real once YTRun has actually set it via the button below, so test the
+full round trip directly: open a video with captions → Download menu →
+**Summarize via ChatGPT** → pick a length → **Send to ChatGPT**. iOS
+switches to Shortcuts briefly, then back to YTRun automatically with
+the result — no system prompts should appear along the way.
 
 ### Troubleshooting
 
@@ -169,10 +160,11 @@ timestamped log of exactly what happened. Common messages:
 | Log message | What it means | Fix |
 |---|---|---|
 | "You are logged out. Please open the ChatGPT app to log in." | "Ask ChatGPT" needs a fresh/"warm" session | Open the ChatGPT app directly, confirm you're signed in, retry |
-| Reply asks you to paste the transcript | Message field isn't wired to Clipboard | Fix "Ask ChatGPT" → Message (see mistakes above) |
-| Stuck on "Waiting for the Shortcut…" | Shortcut never finished, or "Show When Run" left it open in ChatGPT | Tap **Paste From Clipboard Instead** once you have a reply on the clipboard |
-| "Clipboard still has the original transcript…" | Nothing new was ever copied | Check the final "Copy to Clipboard" action uses the *Ask ChatGPT* output, not the earlier Clipboard variable |
+| Reply asks you to paste the transcript | Message field isn't wired to "Get Pending Transcript" | Fix "Ask ChatGPT" → Message (see mistake above) |
+| Stuck on "Waiting for the Shortcut…" | Shortcut never finished, or "Show When Run" left it open in ChatGPT | Tap **Check for Result** once you believe "Save Summary" has run |
+| "…'Save Summary' was never called…" | The callback fired but nothing was ever saved | Check "Save Summary" is the Shortcut's last action and its Summary parameter is wired to Ask ChatGPT's output |
 | Shortcuts opens to its main list, nothing runs | Shortcut name doesn't match Settings | Fix the name in either place so they match exactly |
+| "Get Pending Transcript"/"Save Summary" don't appear in Shortcuts' search | App Intents not yet indexed | Launch YTRun at least once after installing/rebuilding it, then check again |
 
 Results here are cached the same way as AI Gateway's — per video +
 length, cleared when you move to a different video.

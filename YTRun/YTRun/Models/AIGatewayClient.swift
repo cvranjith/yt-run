@@ -20,6 +20,17 @@ enum AIGatewaySummaryLength: String, CaseIterable, Identifiable {
     }
 }
 
+enum AIGatewayDownloadKind: String {
+    case video, audio
+}
+
+struct AIGatewayDownloadInfo {
+    let title: String
+    let ext: String
+    let url: URL
+    let filesize: Int?
+}
+
 enum AIGatewayError: Error {
     case notConfigured
     case invalidURL
@@ -140,6 +151,76 @@ final class AIGatewayClient: ObservableObject {
         }
         cachedSummaries[length] = summary
         return .success(summary)
+    }
+
+    // Resolves a direct, ready-to-download URL via the gateway's
+    // youtube_download service (see that project's
+    // services/youtube_download.py) — no video bytes pass through the
+    // gateway or this method; the caller downloads `url` itself
+    // straight from YouTube's CDN, which is what gives a normal
+    // URLSession download-progress callback for free. Not cached (each
+    // resolved URL is signed/time-limited, so there'd be little point).
+    func resolveDownloadURL(
+        videoID: String,
+        kind: AIGatewayDownloadKind,
+        settings: AppSettings
+    ) async -> Result<AIGatewayDownloadInfo, AIGatewayError> {
+        guard let baseURL = Self.baseURL(from: settings) else {
+            return .failure(Self.configError(settings))
+        }
+
+        let tokenResult = await token(baseURL: baseURL, settings: settings)
+        guard case .success(let accessToken) = tokenResult else {
+            if case .failure(let error) = tokenResult { return .failure(error) }
+            return .failure(.decoding)
+        }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("invoke"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "service_id": "youtube_download",
+            "params": ["video_id": videoID, "kind": kind.rawValue],
+        ])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            return .failure(.network(error))
+        }
+
+        guard let http = response as? HTTPURLResponse else { return .failure(.decoding) }
+
+        if http.statusCode == 401 {
+            cachedToken = nil
+            cachedTokenExpiry = nil
+            return .failure(.unauthorized)
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(.decoding)
+        }
+
+        guard (200...299).contains(http.statusCode) else {
+            return .failure(.server((json["error"] as? String) ?? "Request failed (\(http.statusCode))."))
+        }
+
+        guard let result = json["result"] as? [String: Any],
+              let urlString = result["url"] as? String,
+              let url = URL(string: urlString),
+              let ext = result["ext"] as? String else {
+            return .failure(.decoding)
+        }
+
+        return .success(AIGatewayDownloadInfo(
+            title: result["title"] as? String ?? "Video",
+            ext: ext,
+            url: url,
+            filesize: result["filesize"] as? Int
+        ))
     }
 
     // Used by Settings' "Test Connection" — just proves the credentials
