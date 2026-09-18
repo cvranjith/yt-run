@@ -28,28 +28,22 @@ struct DeployView: View {
     private static let maxWaitSeconds: TimeInterval = 20 * 60
     private static let pollIntervalNanoseconds: UInt64 = 3_000_000_000
 
-    // When this running instance was actually installed. Reads the
-    // creation date of the *container* directory (one level above the
-    // .app bundle itself, e.g. .../Application/<UUID>/YTRun.app) —
-    // `installd` mints a fresh UUID directory on every install, so its
-    // creation date is a real install timestamp. The .app bundle's own
-    // files, by contrast, come from an extracted archive and reported
-    // 1 Jan 1970 in practice — their dates don't reflect when this
-    // install actually happened, just whatever the archive recorded.
-    private static var installDate: Date? {
-        let containerURL = Bundle.main.bundleURL.deletingLastPathComponent()
-        let attrs = try? FileManager.default.attributesOfItem(atPath: containerURL.path)
-        return attrs?[.creationDate] as? Date
-    }
-
     var body: some View {
         Form {
             Section {
-                if let installDate = Self.installDate {
+                if let installDate = BuildInfo.installDate {
                     HStack {
                         Text("Last installed")
                         Spacer()
                         Text(installDate.formatted(date: .abbreviated, time: .shortened))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let hash = BuildInfo.commitHash {
+                    HStack {
+                        Text("Commit")
+                        Spacer()
+                        Text(BuildInfo.commitDate.map { "\(hash) · \($0.formatted(date: .abbreviated, time: .omitted))" } ?? hash)
                             .foregroundStyle(.secondary)
                     }
                 }
