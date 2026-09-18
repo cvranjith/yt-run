@@ -158,23 +158,21 @@ struct ContentView: View {
         }
         let isUrgent = daysRemaining <= 2
         let dateText = expirationDate.formatted(date: .abbreviated, time: .omitted)
-        let daysText = daysRemaining <= 0
-            ? "today"
-            : daysRemaining == 1 ? "in 1 day" : "in \(daysRemaining) days"
+        let daysText = daysRemaining <= 0 ? "today" : "\(daysRemaining)d"
 
-        return AnyView(HStack(spacing: 8) {
+        return AnyView(HStack(spacing: 6) {
             Image(systemName: isUrgent ? "exclamationmark.triangle.fill" : "clock")
-            Text("App expires \(daysText) (\(dateText)) — reinstall from Xcode to renew.")
-                .font(.caption)
-                .fontWeight(isUrgent ? .semibold : .regular)
+            Text("Expires \(daysText) · \(dateText)")
         }
+        .font(.caption)
+        .fontWeight(isUrgent ? .semibold : .regular)
         .foregroundStyle(isUrgent ? Color.red : .secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
         .background(
             (isUrgent ? Color.red : Color.secondary).opacity(0.12),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            in: Capsule()
         ))
     }
 
