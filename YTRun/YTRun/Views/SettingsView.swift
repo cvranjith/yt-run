@@ -132,6 +132,9 @@ struct SettingsView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                SecureField("Token (for ai-router)", text: $settings.aiGatewayToken)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 TextField("Client ID", text: $settings.aiGatewayClientID)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -149,7 +152,7 @@ struct SettingsView: View {
             } header: {
                 Text("AI Gateway")
             } footer: {
-                Text("Powers \"Summarize\" on the YouTube screen. Get these from your ai-gateway's own /ui dashboard (Sign in → Clients panel) — see that project's README.")
+                Text("Powers \"Summarize\" and Downloads on the YouTube screen. If Token is set, both route through ai-router at this URL instead of ai-gateway directly — no expiry, nothing to refresh. Leave Token blank to keep using Client ID/Secret (from your ai-gateway's /ui dashboard) for the direct OAuth2 flow instead, for both features.")
             }
 
             Section {

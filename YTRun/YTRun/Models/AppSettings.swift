@@ -34,6 +34,7 @@ final class AppSettings: ObservableObject {
         static let aiGatewayURI = "aiGatewayURI"
         static let aiGatewayClientID = "aiGatewayClientID"
         static let aiGatewayClientSecret = "aiGatewayClientSecret"
+        static let aiGatewayToken = "aiGatewayToken"
         static let chatGPTShortcutName = "chatGPTShortcutName"
     }
 
@@ -180,6 +181,22 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(aiGatewayClientSecret, forKey: Keys.aiGatewayClientSecret) }
     }
 
+    // A plain static shared bearer token — for talking to `ai-router`
+    // (a Cloudflare Worker in front of ai-gateway and, later, other
+    // backends) instead of ai-gateway directly. When this is set, both
+    // Summarize and Downloads send it as `Authorization: Bearer
+    // <token>` against `aiGatewayURI` using ai-router's request shape,
+    // skipping the OAuth2 exchange entirely — unlike that flow, this
+    // token never expires and is never refreshed; it's a fixed
+    // credential until manually rotated. Leave blank to keep using the
+    // Client ID/Secret OAuth2 flow directly against ai-gateway instead
+    // (for both features symmetrically — whichever credential is set
+    // decides the backend for everything, not just one feature, so
+    // `aiGatewayURI` only ever needs to point at one place at a time).
+    @Published var aiGatewayToken: String {
+        didSet { UserDefaults.standard.set(aiGatewayToken, forKey: Keys.aiGatewayToken) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -220,6 +237,7 @@ final class AppSettings: ObservableObject {
         self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? ""
         self.aiGatewayClientID = defaults.string(forKey: Keys.aiGatewayClientID) ?? ""
         self.aiGatewayClientSecret = defaults.string(forKey: Keys.aiGatewayClientSecret) ?? ""
+        self.aiGatewayToken = defaults.string(forKey: Keys.aiGatewayToken) ?? ""
         self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
     }
 }
