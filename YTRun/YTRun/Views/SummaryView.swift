@@ -13,6 +13,7 @@ struct SummaryView: View {
     @EnvironmentObject var webViewStore: YouTubeWebViewStore
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var aiGatewayClient: AIGatewayClient
+    @EnvironmentObject var downloadManager: DownloadManager
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var speechReader = SpeechReader()
@@ -170,7 +171,7 @@ struct SummaryView: View {
         isLoading = true
         speechReader.stop()
 
-        let result = await aiGatewayClient.summarize(videoID: videoID, length: requestedLength, settings: settings)
+        let result = await aiGatewayClient.summarize(videoID: videoID, length: requestedLength, settings: settings, downloadManager: downloadManager)
         // The length picker may have changed while this was in flight —
         // if so, this result is stale (it's already been cached by
         // AIGatewayClient regardless, so nothing is lost); only apply it
@@ -194,4 +195,5 @@ struct SummaryView: View {
         .environmentObject(YouTubeWebViewStore())
         .environmentObject(AppSettings())
         .environmentObject(AIGatewayClient())
+        .environmentObject(DownloadManager())
 }

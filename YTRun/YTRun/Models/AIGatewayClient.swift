@@ -31,6 +31,29 @@ struct AIGatewayDownloadInfo {
     let filesize: Int?
 }
 
+// Which backend "Summarize" uses. `ytRunGateway` is the original path
+// (server-side transcript fetch + Codex, via ai-router). The other
+// three call a provider's own API directly from the app, using the
+// same client-side transcript fetch "View Captions" already relies on
+// (see DownloadManager.fetchCaptionEvents) — no server involved for
+// those at all, which is what lets someone other than the app's
+// original owner use Summarize with just their own API key, no access
+// to the home-hosted gateway needed.
+enum AISummaryProvider: String, CaseIterable, Identifiable {
+    case ytRunGateway, openAICompatible, gemini, claude
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .ytRunGateway: return "YTRun Gateway"
+        case .openAICompatible: return "OpenAI (compatible)"
+        case .gemini: return "Gemini"
+        case .claude: return "Claude"
+        }
+    }
+}
+
 struct MacWifiInfo {
     let ssid: String?
     let ip: String?
@@ -64,17 +87,17 @@ enum AIGatewayError: Error {
     var message: String {
         switch self {
         case .notConfigured:
-            return "Set the YTRun Gateway URL and Token in Settings."
+            return "This AI provider isn't fully configured yet — check its settings under AI Providers."
         case .invalidURL:
-            return "The YTRun Gateway URL in Settings doesn't look valid."
+            return "That URL doesn't look valid — check it in Settings."
         case .network(let error):
-            return "Couldn't reach the YTRun Gateway: \(error.localizedDescription)"
+            return "Couldn't reach the server: \(error.localizedDescription)"
         case .unauthorized:
-            return "The YTRun Gateway rejected this token — check it in Settings."
+            return "The request was rejected — check the token/API key in Settings."
         case .server(let message):
             return message
         case .decoding:
-            return "Got an unexpected response from the YTRun Gateway."
+            return "Got an unexpected response."
         case .cancelled:
             return "Download cancelled."
         }
@@ -112,16 +135,35 @@ final class AIGatewayClient: ObservableObject {
         return cachedSummaries[length]
     }
 
+    // `downloadManager` is only actually used for direct-provider
+    // summaries (see below) — YTRun Gateway fetches its own transcript
+    // server-side, same as always. Threaded through as a parameter
+    // rather than AIGatewayClient owning a DownloadManager reference,
+    // since the two are siblings (both owned/injected at ContentView),
+    // not naturally one containing the other.
     func summarize(
         videoID: String,
         length: AIGatewaySummaryLength,
-        settings: AppSettings
+        settings: AppSettings,
+        downloadManager: DownloadManager
     ) async -> Result<String, AIGatewayError> {
         if let cached = cachedSummary(videoID: videoID, length: length) {
             return .success(cached)
         }
 
-        let result = await performSummarize(videoID: videoID, length: length, settings: settings)
+        let result: Result<String, AIGatewayError>
+        switch settings.defaultSummaryProvider {
+        case .ytRunGateway:
+            result = await performSummarize(videoID: videoID, length: length, settings: settings)
+        case .openAICompatible, .gemini, .claude:
+            result = await summarizeViaDirectProvider(
+                videoID: videoID,
+                length: length,
+                provider: settings.defaultSummaryProvider,
+                settings: settings,
+                downloadManager: downloadManager
+            )
+        }
 
         if case .success(let summary) = result {
             if videoID != cachedVideoID {
@@ -180,6 +222,183 @@ final class AIGatewayClient: ObservableObject {
             return .failure(.decoding)
         }
         return .success(output)
+    }
+
+    // MARK: - Direct-provider summarization (no server involved)
+    //
+    // Fetches the transcript client-side (the exact same path "View
+    // Captions" already uses — see DownloadManager.fetchCaptionEvents)
+    // and sends it straight to whichever provider's own API, using the
+    // key/model configured for it. Same length-based instructions as
+    // ai-gateway's own youtube_summarizer.py, kept in sync by hand so
+    // output quality/behavior feels consistent regardless of which
+    // path a given install is actually using.
+    private static let lengthPrompts: [AIGatewaySummaryLength: String] = [
+        .short: "Summarize the following YouTube video transcript in 2-3 concise sentences. Output only the summary itself, nothing else - no preamble, no headings, no quotes around it.",
+        .paragraph: "Summarize the following YouTube video transcript in a single well-organized paragraph (roughly 4-6 sentences) covering the main points. Output only the summary itself, nothing else - no preamble, no headings, no quotes around it.",
+        .detailed: "Write a detailed summary of the following YouTube video transcript, covering all the main points and key details across a few short paragraphs. Output only the summary itself, nothing else - no preamble, no headings, no quotes around it.",
+    ]
+
+    private func summarizeViaDirectProvider(
+        videoID: String,
+        length: AIGatewaySummaryLength,
+        provider: AISummaryProvider,
+        settings: AppSettings,
+        downloadManager: DownloadManager
+    ) async -> Result<String, AIGatewayError> {
+        let events: [CaptionEvent]
+        switch await downloadManager.fetchCaptionEvents(videoID: videoID) {
+        case .success(let fetched): events = fetched
+        case .failure(let error): return .failure(.server(error.message))
+        }
+        let transcript = DownloadManager.plainText(from: events).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !transcript.isEmpty else {
+            return .failure(.server("No usable captions were found for this video."))
+        }
+
+        let instructions = (Self.lengthPrompts[length] ?? "") + " Write the summary in the same language as the transcript."
+
+        switch provider {
+        case .ytRunGateway:
+            return .failure(.server("Unreachable - ytRunGateway doesn't use this path."))
+        case .openAICompatible:
+            return await callOpenAICompatible(instructions: instructions, transcript: transcript, settings: settings)
+        case .gemini:
+            return await callGemini(instructions: instructions, transcript: transcript, settings: settings)
+        case .claude:
+            return await callClaude(instructions: instructions, transcript: transcript, settings: settings)
+        }
+    }
+
+    // OpenAI's Chat Completions API — also what Grok (genuinely OpenAI-
+    // SDK-compatible) and any self-hosted compatible server speak, just
+    // via a different base URL.
+    private func callOpenAICompatible(instructions: String, transcript: String, settings: AppSettings) async -> Result<String, AIGatewayError> {
+        var trimmedBase = settings.openAICompatibleBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = settings.openAICompatibleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settings.openAICompatibleModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBase.isEmpty, !apiKey.isEmpty, !model.isEmpty else { return .failure(.notConfigured) }
+        if trimmedBase.hasSuffix("/") { trimmedBase.removeLast() }
+        guard let baseURL = URL(string: trimmedBase) else { return .failure(.invalidURL) }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": instructions],
+                ["role": "user", "content": transcript],
+            ],
+            "max_tokens": 1024,
+        ])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            return .failure(.network(error))
+        }
+        guard let http = response as? HTTPURLResponse,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(.decoding)
+        }
+        if http.statusCode == 401 { return .failure(.unauthorized) }
+        guard (200...299).contains(http.statusCode) else {
+            let message = (json["error"] as? [String: Any])?["message"] as? String ?? "Request failed (\(http.statusCode))."
+            return .failure(.server(message))
+        }
+        guard let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let content = message["content"] as? String else {
+            return .failure(.decoding)
+        }
+        return .success(content.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func callGemini(instructions: String, transcript: String, settings: AppSettings) async -> Result<String, AIGatewayError> {
+        let apiKey = settings.geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settings.geminiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty, !model.isEmpty else { return .failure(.notConfigured) }
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)") else {
+            return .failure(.invalidURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "systemInstruction": ["parts": [["text": instructions]]],
+            "contents": [["parts": [["text": transcript]]]],
+            "generationConfig": ["maxOutputTokens": 1024],
+        ])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            return .failure(.network(error))
+        }
+        guard let http = response as? HTTPURLResponse,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(.decoding)
+        }
+        if http.statusCode == 401 || http.statusCode == 403 { return .failure(.unauthorized) }
+        guard (200...299).contains(http.statusCode) else {
+            let message = (json["error"] as? [String: Any])?["message"] as? String ?? "Request failed (\(http.statusCode))."
+            return .failure(.server(message))
+        }
+        guard let candidates = json["candidates"] as? [[String: Any]],
+              let content = candidates.first?["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else {
+            return .failure(.decoding)
+        }
+        return .success(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func callClaude(instructions: String, transcript: String, settings: AppSettings) async -> Result<String, AIGatewayError> {
+        let apiKey = settings.claudeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = settings.claudeModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty, !model.isEmpty else { return .failure(.notConfigured) }
+        let url = URL(string: "https://api.anthropic.com/v1/messages")!
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "max_tokens": 1024,
+            "system": instructions,
+            "messages": [["role": "user", "content": transcript]],
+        ])
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            return .failure(.network(error))
+        }
+        guard let http = response as? HTTPURLResponse,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return .failure(.decoding)
+        }
+        if http.statusCode == 401 { return .failure(.unauthorized) }
+        guard (200...299).contains(http.statusCode) else {
+            let message = (json["error"] as? [String: Any])?["message"] as? String ?? "Request failed (\(http.statusCode))."
+            return .failure(.server(message))
+        }
+        guard let content = json["content"] as? [[String: Any]],
+              let text = content.first?["text"] as? String else {
+            return .failure(.decoding)
+        }
+        return .success(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     // Resolves a direct, ready-to-download URL via the youtube_download

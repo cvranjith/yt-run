@@ -190,8 +190,11 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(isTestingConnection)
+                NavigationLink("AI Providers") {
+                    AIProvidersView()
+                }
             } header: {
-                sectionHeader("YTRun Gateway", info: "Powers \"Summarize\" and Downloads on the YouTube screen. URL and Token are both required — see ai-router's own README for how to set these up.")
+                sectionHeader("YTRun Gateway", info: "Always powers Downloads on the YouTube screen. Powers Summarize too, unless a different default is chosen on the \"AI Providers\" screen below — where Grok, OpenAI, Gemini, and Claude can each be configured with their own key.")
             }
 
             Section {

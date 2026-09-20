@@ -44,6 +44,14 @@ final class AppSettings: ObservableObject {
         static let enableStairsOption = "enableStairsOption"
         static let floorsPerStairSet = "floorsPerStairSet"
         static let secondsPerStairSet = "secondsPerStairSet"
+        static let defaultSummaryProvider = "defaultSummaryProvider"
+        static let openAICompatibleBaseURL = "openAICompatibleBaseURL"
+        static let openAICompatibleAPIKey = "openAICompatibleAPIKey"
+        static let openAICompatibleModel = "openAICompatibleModel"
+        static let geminiAPIKey = "geminiAPIKey"
+        static let geminiModel = "geminiModel"
+        static let claudeAPIKey = "claudeAPIKey"
+        static let claudeModel = "claudeModel"
     }
 
     private enum Defaults {
@@ -72,6 +80,15 @@ final class AppSettings: ObservableObject {
         static let secondsPerExerciseSet = 120
         static let floorsPerStairSet = 2
         static let secondsPerStairSet = 120
+        // A live, shared personal deployment — bundled so other users
+        // don't have to be told a URL by hand; they still each need
+        // their own Token, which is the actual per-person gate. See
+        // AIGatewayClient's own header comment for the full picture.
+        static let aiGatewayURI = "https://ai-router.cvranjith.workers.dev"
+        static let openAICompatibleBaseURL = "https://api.openai.com/v1"
+        static let openAICompatibleModel = "gpt-4o-mini"
+        static let geminiModel = "gemini-2.0-flash"
+        static let claudeModel = "claude-haiku-4-5-20251001"
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -264,6 +281,49 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(secondsPerStairSet, forKey: Keys.secondsPerStairSet) }
     }
 
+    // Which backend "Summarize" actually uses — YTRun Gateway (the
+    // default; reuses `aiGatewayURI`/`aiGatewayToken` above) or a
+    // direct call to a provider using the app's own client-side
+    // transcript fetch (see AIGatewayClient's direct-provider
+    // adapters), each configured on the "AI Providers" screen. Picking
+    // one here is silent/global — Summarize itself has no per-request
+    // provider picker, just whichever this is set to.
+    @Published var defaultSummaryProvider: AISummaryProvider {
+        didSet { UserDefaults.standard.set(defaultSummaryProvider.rawValue, forKey: Keys.defaultSummaryProvider) }
+    }
+
+    // OpenAI-compatible chat-completions endpoint — also covers Grok
+    // (genuinely OpenAI-SDK-compatible) and any self-hosted compatible
+    // server, just by pointing the base URL elsewhere with that
+    // provider's own key/model.
+    @Published var openAICompatibleBaseURL: String {
+        didSet { UserDefaults.standard.set(openAICompatibleBaseURL, forKey: Keys.openAICompatibleBaseURL) }
+    }
+
+    @Published var openAICompatibleAPIKey: String {
+        didSet { UserDefaults.standard.set(openAICompatibleAPIKey, forKey: Keys.openAICompatibleAPIKey) }
+    }
+
+    @Published var openAICompatibleModel: String {
+        didSet { UserDefaults.standard.set(openAICompatibleModel, forKey: Keys.openAICompatibleModel) }
+    }
+
+    @Published var geminiAPIKey: String {
+        didSet { UserDefaults.standard.set(geminiAPIKey, forKey: Keys.geminiAPIKey) }
+    }
+
+    @Published var geminiModel: String {
+        didSet { UserDefaults.standard.set(geminiModel, forKey: Keys.geminiModel) }
+    }
+
+    @Published var claudeAPIKey: String {
+        didSet { UserDefaults.standard.set(claudeAPIKey, forKey: Keys.claudeAPIKey) }
+    }
+
+    @Published var claudeModel: String {
+        didSet { UserDefaults.standard.set(claudeModel, forKey: Keys.claudeModel) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -301,7 +361,7 @@ final class AppSettings: ObservableObject {
             ?? Defaults.listenRatePercent
         self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int
             ?? Defaults.carRatePercent
-        self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? ""
+        self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? Defaults.aiGatewayURI
         self.aiGatewayToken = defaults.string(forKey: Keys.aiGatewayToken) ?? ""
         self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
         self.enableWalkOption = defaults.bool(forKey: Keys.enableWalkOption)
@@ -318,5 +378,14 @@ final class AppSettings: ObservableObject {
             ?? Defaults.floorsPerStairSet
         self.secondsPerStairSet = defaults.object(forKey: Keys.secondsPerStairSet) as? Int
             ?? Defaults.secondsPerStairSet
+        self.defaultSummaryProvider = (defaults.string(forKey: Keys.defaultSummaryProvider)).flatMap(AISummaryProvider.init(rawValue:))
+            ?? .ytRunGateway
+        self.openAICompatibleBaseURL = defaults.string(forKey: Keys.openAICompatibleBaseURL) ?? Defaults.openAICompatibleBaseURL
+        self.openAICompatibleAPIKey = defaults.string(forKey: Keys.openAICompatibleAPIKey) ?? ""
+        self.openAICompatibleModel = defaults.string(forKey: Keys.openAICompatibleModel) ?? Defaults.openAICompatibleModel
+        self.geminiAPIKey = defaults.string(forKey: Keys.geminiAPIKey) ?? ""
+        self.geminiModel = defaults.string(forKey: Keys.geminiModel) ?? Defaults.geminiModel
+        self.claudeAPIKey = defaults.string(forKey: Keys.claudeAPIKey) ?? ""
+        self.claudeModel = defaults.string(forKey: Keys.claudeModel) ?? Defaults.claudeModel
     }
 }
