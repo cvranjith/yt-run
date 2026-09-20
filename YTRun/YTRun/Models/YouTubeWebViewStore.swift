@@ -519,6 +519,19 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
     (function () {
         var styleId = '__ytrunControlsStyle';
         var playbackRates = [1, 1.25, 1.5, 1.75, 2];
+        // 'auto' means "don't constrain it" (YouTube's own adaptive
+        // logic decides) — everything else forces that exact level via
+        // the same quality-range API Listen Mode already uses to force
+        // 'tiny'. Requested (not necessarily actual — YouTube can still
+        // fall back if a level isn't available for this video) quality,
+        // remembered here since there's no direct getter for "the level
+        // this page was told to use" the way there is for e.g. rate.
+        var qualityLevels = ['auto', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+        var qualityLabels = {
+            auto: 'Auto', hd1080: '1080p', hd720: '720p', large: '480p',
+            medium: '360p', small: '240p', tiny: '144p'
+        };
+        var requestedQuality = 'auto';
 
         var style = document.createElement('style');
         style.id = styleId;
@@ -527,7 +540,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             'pointer-events:auto;width:100%;font-family:-apple-system,sans-serif;}' +
             '.ytrun-seekbar{width:90%;max-width:360px;accent-color:#fff;}' +
             '.ytrun-time{color:#fff;font-size:13px;opacity:0.85;font-variant-numeric:tabular-nums;}' +
-            '.ytrun-controls{display:flex;align-items:center;gap:14px;}' +
+            '.ytrun-controls{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px;}' +
             '.ytrun-btn{background:rgba(255,255,255,0.16);color:#fff;border:none;' +
             'border-radius:10px;padding:10px 14px;font-size:15px;min-width:44px;min-height:44px;}' +
             '.ytrun-btn-primary{font-size:22px;padding:10px 20px;}';
@@ -642,6 +655,36 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             if (v) { v.playbackRate = next; }
         }
 
+        // Same quality-range API Listen Mode's own forceLowestQuality()
+        // uses, just parametrized instead of hardcoded to 'tiny'. Setting
+        // both the range and the single-value quality mirrors what
+        // YouTube's own quality-settings UI does — some player builds
+        // only honor one or the other.
+        function setQuality(level) {
+            requestedQuality = level;
+            try {
+                var player = getPlayer();
+                if (!player) { return; }
+                if (level === 'auto') {
+                    if (typeof player.setPlaybackQualityRange === 'function') {
+                        player.setPlaybackQualityRange('tiny', 'hd1080');
+                    }
+                    return;
+                }
+                if (typeof player.setPlaybackQualityRange === 'function') {
+                    player.setPlaybackQualityRange(level, level);
+                }
+                if (typeof player.setPlaybackQuality === 'function') {
+                    player.setPlaybackQuality(level);
+                }
+            } catch (e) { /* best-effort; ignore */ }
+        }
+
+        function cycleQuality() {
+            var next = qualityLevels[(qualityLevels.indexOf(requestedQuality) + 1) % qualityLevels.length];
+            setQuality(next);
+        }
+
         function isPlaying() {
             try {
                 var player = getPlayer();
@@ -710,6 +753,14 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             row.appendChild(playPause);
             row.appendChild(forward);
             row.appendChild(rate);
+            // Only offered where a manual choice can actually stick —
+            // Listen Mode's own overlay re-asserts 'tiny' every 3s via
+            // its interval, which would silently fight this button.
+            var quality = null;
+            if (options.showQuality) {
+                quality = makeButton('', qualityLabels[requestedQuality], function () { cycleQuality(); sync(); });
+                row.appendChild(quality);
+            }
             if (typeof options.onExit === 'function') {
                 row.appendChild(makeButton('', '\\u2715', options.onExit));
             }
@@ -719,6 +770,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
                 playPause.textContent = isPlaying() ? '\\u23F8' : '\\u25B6';
                 var r = currentPlaybackRate();
                 rate.textContent = (r === 1 ? '1x' : r + 'x');
+                if (quality) { quality.textContent = qualityLabels[requestedQuality]; }
                 var duration = getDuration();
                 // While actively dragging, show the *dragged-to* time
                 // (derived from the seek bar's own live value) rather
@@ -741,6 +793,8 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             togglePlayPause: togglePlayPause,
             cyclePlaybackRate: cyclePlaybackRate,
             currentPlaybackRate: currentPlaybackRate,
+            setQuality: setQuality,
+            cycleQuality: cycleQuality,
             isPlaying: isPlaying,
             makeButton: makeButton,
             buildTransportControls: buildTransportControls,
@@ -1006,7 +1060,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             if (document.getElementById(overlayId)) { return; }
             var overlay = document.createElement('div');
             overlay.id = overlayId;
-            controls = window.__ytrunPlayerControls.buildTransportControls({ onExit: exitFakeFullscreen });
+            controls = window.__ytrunPlayerControls.buildTransportControls({ onExit: exitFakeFullscreen, showQuality: true });
             overlay.appendChild(controls.row);
             (document.body || document.documentElement).appendChild(overlay);
         }
