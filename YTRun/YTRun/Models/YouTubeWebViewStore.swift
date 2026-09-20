@@ -526,6 +526,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             '.ytrun-transport{display:flex;flex-direction:column;align-items:center;gap:10px;' +
             'pointer-events:auto;width:100%;font-family:-apple-system,sans-serif;}' +
             '.ytrun-seekbar{width:90%;max-width:360px;accent-color:#fff;}' +
+            '.ytrun-time{color:#fff;font-size:13px;opacity:0.85;font-variant-numeric:tabular-nums;}' +
             '.ytrun-controls{display:flex;align-items:center;gap:14px;}' +
             '.ytrun-btn{background:rgba(255,255,255,0.16);color:#fff;border:none;' +
             'border-radius:10px;padding:10px 14px;font-size:15px;min-width:44px;min-height:44px;}' +
@@ -576,6 +577,16 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
 
         function seekBy(deltaSeconds) {
             seekTo(getCurrentTime() + deltaSeconds);
+        }
+
+        function formatTime(seconds) {
+            seconds = Math.max(0, Math.floor(seconds || 0));
+            var h = Math.floor(seconds / 3600);
+            var m = Math.floor((seconds % 3600) / 60);
+            var s = seconds % 60;
+            var mm = (h > 0 && m < 10) ? ('0' + m) : String(m);
+            var ss = s < 10 ? ('0' + s) : String(s);
+            return h > 0 ? (h + ':' + mm + ':' + ss) : (mm + ':' + ss);
         }
 
         // Seeks to (approximately) the current position purely to force
@@ -668,7 +679,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             seekBar.value = '0';
             seekBar.className = 'ytrun-seekbar';
             var isDragging = false;
-            seekBar.addEventListener('input', function () { isDragging = true; });
+            seekBar.addEventListener('input', function () { isDragging = true; sync(); });
             seekBar.addEventListener('change', function () {
                 var duration = getDuration();
                 if (duration > 0) {
@@ -678,6 +689,11 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
                 sync();
             });
             wrapper.appendChild(seekBar);
+
+            var timeLabel = document.createElement('div');
+            timeLabel.className = 'ytrun-time';
+            timeLabel.textContent = '0:00 / 0:00';
+            wrapper.appendChild(timeLabel);
 
             var row = document.createElement('div');
             row.className = 'ytrun-controls';
@@ -703,12 +719,18 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
                 playPause.textContent = isPlaying() ? '\\u23F8' : '\\u25B6';
                 var r = currentPlaybackRate();
                 rate.textContent = (r === 1 ? '1x' : r + 'x');
-                if (!isDragging) {
-                    var duration = getDuration();
-                    if (duration > 0) {
-                        seekBar.value = String(Math.round((getCurrentTime() / duration) * 1000));
-                    }
+                var duration = getDuration();
+                // While actively dragging, show the *dragged-to* time
+                // (derived from the seek bar's own live value) rather
+                // than the video's still-unmoved current time — the
+                // actual seek only happens on 'change', once released.
+                var displayedCurrent = isDragging
+                    ? (duration > 0 ? (Number(seekBar.value) / 1000) * duration : 0)
+                    : getCurrentTime();
+                if (!isDragging && duration > 0) {
+                    seekBar.value = String(Math.round((displayedCurrent / duration) * 1000));
                 }
+                timeLabel.textContent = formatTime(displayedCurrent) + ' / ' + (duration > 0 ? formatTime(duration) : '--:--');
             }
 
             return { row: wrapper, sync: sync };
