@@ -16,6 +16,7 @@ struct YouTubeView: View {
     @EnvironmentObject var cloudSync: CloudSyncService
     @EnvironmentObject var downloadManager: DownloadManager
     @EnvironmentObject var aiGatewayClient: AIGatewayClient
+    @EnvironmentObject var walkModeManager: WalkModeManager
 
     @StateObject private var historyRecorder = WatchHistoryRecorder()
     @Environment(\.modelContext) private var modelContext
@@ -76,8 +77,15 @@ struct YouTubeView: View {
     @State private var captionsAvailabilityCacheVideoID: String?
     @State private var captionsAvailabilityCacheValue: Bool?
 
+    // Walk mode bypasses the normal allowance wall entirely while
+    // active — it's a live gate (see WalkModeManager), not a top-up to
+    // this check. Whether playback is actually *allowed* moment-to-
+    // moment while walking is handled separately, by
+    // `webViewStore.isPlaybackAllowed` and the walk status bar below —
+    // this just decides whether to show the locked screen at all.
     private var isLocked: Bool {
-        usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
+        guard !walkModeManager.isActive else { return false }
+        return usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
             || usageTracker.isInCooldown
     }
 
@@ -112,6 +120,9 @@ struct YouTubeView: View {
                     // .isCustomFullscreen`) so it doesn't eat into the
                     // expanded player's space.
                     if !webViewStore.isCustomFullscreen {
+                        if walkModeManager.isActive {
+                            walkStatusBar
+                        }
                         if downloadManager.isDownloading {
                             downloadProgressBar
                         }
@@ -128,6 +139,22 @@ struct YouTubeView: View {
                 // scrolling/interacting.
                 .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
                     if webViewStore.isPlaying {
+                        // Walk mode is a separate, free channel — it
+                        // never touches the daily/binge counters at all,
+                        // and enforces its own moving/not-moving gate
+                        // instead of the usual one. Checked right here,
+                        // in the same reliable per-second callback
+                        // that's already proven to keep firing in the
+                        // background, rather than an `.onChange` of
+                        // `isCurrentlyMoving` alone (same reasoning as
+                        // the existing `forceStopAudio` call below).
+                        if walkModeManager.isActive {
+                            if !walkModeManager.isCurrentlyMoving {
+                                webViewStore.pause()
+                            }
+                            return
+                        }
+
                         let isBackground = scenePhase != .active
                         // Only worth checking the audio route while
                         // actually backgrounded — foreground playback is
@@ -459,6 +486,28 @@ struct YouTubeView: View {
     // carries the Cancel button — both act on `downloadManager` directly
     // rather than through a result callback, since there's no "result"
     // yet for an in-flight download.
+    // Shown for the entire duration of a Walk session (see
+    // WalkModeManager) — not just while paused — so it's always visible
+    // that the normal allowance wall is being bypassed this way, and
+    // "End Walk" is always reachable rather than only appearing at the
+    // moment something goes wrong.
+    private var walkStatusBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: walkModeManager.isCurrentlyMoving ? "figure.walk" : "figure.stand")
+            Text(walkModeManager.isCurrentlyMoving ? "Walking — unlocked" : "Not moving — paused")
+                .font(.caption)
+            Spacer()
+            Button("End Walk") {
+                walkModeManager.stop()
+            }
+            .font(.caption)
+        }
+        .foregroundStyle(walkModeManager.isCurrentlyMoving ? Color.secondary : Color.orange)
+        .padding(.horizontal)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
     private var downloadProgressBar: some View {
         VStack(spacing: 2) {
             HStack(spacing: 8) {
@@ -661,4 +710,5 @@ struct YouTubeView: View {
     .environmentObject(DownloadManager())
     .environmentObject(AIGatewayClient())
     .environmentObject(ChatGPTShortcutBridge())
+    .environmentObject(WalkModeManager())
 }

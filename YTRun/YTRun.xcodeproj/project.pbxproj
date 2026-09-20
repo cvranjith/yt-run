@@ -402,6 +402,7 @@
 				INFOPLIST_FILE = YTRun/Info.plist;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "YTRun tracks your run with GPS even while your phone is locked, so a run in your pocket still counts.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "YTRun tracks your run distance and duration with GPS to decide whether it qualifies for extra YouTube viewing time.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "YTRun checks periodically whether you are actually still walking, to decide whether to keep allowing playback in Walk mode.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -451,6 +452,7 @@
 				INFOPLIST_FILE = YTRun/Info.plist;
 				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "YTRun tracks your run with GPS even while your phone is locked, so a run in your pocket still counts.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "YTRun tracks your run distance and duration with GPS to decide whether it qualifies for extra YouTube viewing time.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "YTRun checks periodically whether you are actually still walking, to decide whether to keep allowing playback in Walk mode.";
 				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;

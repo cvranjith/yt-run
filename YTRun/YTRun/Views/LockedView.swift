@@ -13,6 +13,7 @@ struct LockedView: View {
     // all need the same shared state.
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
+    @EnvironmentObject var walkModeManager: WalkModeManager
     // The YouTube screen hides the native back button throughout (see
     // `YouTubeView`'s own custom Home button), and this view replaces
     // that screen's content entirely while locked — so without this,
@@ -50,6 +51,20 @@ struct LockedView: View {
                     RunView()
                 }
                 .buttonStyle(.borderedProminent)
+            }
+
+            // Hidden unless explicitly turned on in Settings (same
+            // friction-by-design reasoning as "Simulate Run" below, just
+            // for a real feature rather than a testing bypass) — a live
+            // gate, not a reward: tapping this unlocks the YouTube
+            // screen immediately, for as long as `walkModeManager`'s
+            // periodic checks keep finding you moving. Nothing banked,
+            // nothing saved — see that class's own comments.
+            if settings.enableWalkOption {
+                Button("Walk (listen while moving)") {
+                    walkModeManager.start()
+                }
+                .buttonStyle(.bordered)
             }
 
             // Hidden unless explicitly turned on in Settings — this
@@ -111,4 +126,5 @@ struct LockedView: View {
     LockedView()
         .environmentObject(AppSettings())
         .environmentObject(UsageTracker())
+        .environmentObject(WalkModeManager())
 }

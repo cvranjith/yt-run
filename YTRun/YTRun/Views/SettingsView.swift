@@ -128,6 +128,15 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Show Walk Option", isOn: $settings.enableWalkOption)
+                if settings.enableWalkOption {
+                    Toggle("Allow Video While Walking", isOn: $settings.walkAllowsVideo)
+                }
+            } footer: {
+                Text("Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, checked every ~30 seconds against your actual step count, pausing (with a \"Not moving\" notice) if you stop and resuming once you start again. Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
+            }
+
+            Section {
                 TextField("https://your-host/gateway", text: $settings.aiGatewayURI)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

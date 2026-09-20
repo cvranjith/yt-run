@@ -36,6 +36,8 @@ final class AppSettings: ObservableObject {
         static let aiGatewayClientSecret = "aiGatewayClientSecret"
         static let aiGatewayToken = "aiGatewayToken"
         static let chatGPTShortcutName = "chatGPTShortcutName"
+        static let enableWalkOption = "enableWalkOption"
+        static let walkAllowsVideo = "walkAllowsVideo"
     }
 
     private enum Defaults {
@@ -197,6 +199,25 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(aiGatewayToken, forKey: Keys.aiGatewayToken) }
     }
 
+    // Off by default. When off, the Locked screen's "Walk" option (a
+    // live gate — playback allowed for as long as you're moving,
+    // checked periodically, with nothing banked or saved — see
+    // `WalkModeManager`) doesn't show at all. Same reasoning as
+    // `enableSimulateRun`: requiring a trip to Settings first is
+    // deliberate friction, not a design flaw.
+    @Published var enableWalkOption: Bool {
+        didSet { UserDefaults.standard.set(enableWalkOption, forKey: Keys.enableWalkOption) }
+    }
+
+    // Off by default (audio-only) — while Walk mode is active, this
+    // decides whether full video is ever permitted or it's always
+    // restricted to Listen Mode. Watching video while actually walking
+    // is the thing this defaults against; on lets you opt back into it
+    // (e.g. a slow treadmill walk where glancing at the screen is fine).
+    @Published var walkAllowsVideo: Bool {
+        didSet { UserDefaults.standard.set(walkAllowsVideo, forKey: Keys.walkAllowsVideo) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -239,5 +260,7 @@ final class AppSettings: ObservableObject {
         self.aiGatewayClientSecret = defaults.string(forKey: Keys.aiGatewayClientSecret) ?? ""
         self.aiGatewayToken = defaults.string(forKey: Keys.aiGatewayToken) ?? ""
         self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
+        self.enableWalkOption = defaults.bool(forKey: Keys.enableWalkOption)
+        self.walkAllowsVideo = defaults.bool(forKey: Keys.walkAllowsVideo)
     }
 }

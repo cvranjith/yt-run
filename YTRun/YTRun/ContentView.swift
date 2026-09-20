@@ -50,6 +50,10 @@ struct ContentView: View {
     // app-wide `.onOpenURL` callback below regardless of which screen
     // is on top when the Shortcuts app hands control back.
     @StateObject private var chatGPTBridge = ChatGPTShortcutBridge()
+    // Owned here (like `downloadManager`/`webViewStore`) so a Walk
+    // session survives navigating away from and back to the YouTube
+    // screen, rather than resetting every time that screen appears.
+    @StateObject private var walkModeManager = WalkModeManager()
 
     @Environment(\.modelContext) private var modelContext
 
@@ -108,6 +112,7 @@ struct ContentView: View {
         .environmentObject(downloadManager)
         .environmentObject(aiGatewayClient)
         .environmentObject(chatGPTBridge)
+        .environmentObject(walkModeManager)
         .onOpenURL { url in
             chatGPTBridge.handle(url: url)
         }
@@ -116,16 +121,33 @@ struct ContentView: View {
             // the app's own lock state — without this, tapping play there
             // bypasses the Locked screen entirely, since that remote
             // command otherwise just resumes the video unconditionally.
-            webViewStore.isPlaybackAllowed = { [usageTracker, settings] in
-                !(usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
+            webViewStore.isPlaybackAllowed = { [usageTracker, settings, walkModeManager] in
+                // Walk mode overrides the normal allowance check entirely
+                // while active — allowed exactly when its own periodic
+                // "are you still moving" check last said yes, regardless
+                // of daily/binge state. See WalkModeManager's own
+                // comments for why nothing here interacts with
+                // UsageTracker at all.
+                if walkModeManager.isActive {
+                    return walkModeManager.isCurrentlyMoving
+                }
+                return !(usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
                     || usageTracker.isInCooldown)
             }
             // Lets the YouTube screen respect Settings' "Restrict Shorts"
             // toggle — see `YouTubeWebViewStore`.
             webViewStore.isShortsRestricted = { [settings] in settings.restrictShorts }
             // Lets the YouTube screen respect its own "Listen Mode"
-            // toggle — see `YouTubeWebViewStore`.
-            webViewStore.isListenModeEnabled = { [settings] in settings.listenModeEnabled }
+            // toggle — see `YouTubeWebViewStore`. Forced on during an
+            // active Walk session unless the user has explicitly opted
+            // into full video while walking (Settings' "walkAllowsVideo")
+            // — the whole point of Walk mode defaults to audio-only.
+            webViewStore.isListenModeEnabled = { [settings, walkModeManager] in
+                if walkModeManager.isActive && !settings.walkAllowsVideo {
+                    return true
+                }
+                return settings.listenModeEnabled
+            }
 
             // Implicit sync trigger #1: the app being opened at all. Runs
             // silently in the background — `cloudSync` already tracks
