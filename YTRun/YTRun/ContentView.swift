@@ -94,6 +94,9 @@ struct ContentView: View {
                         MenuTile(title: "Update App", systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
                             DeployView()
                         }
+                        MenuTile(title: "Push-Up Test", systemImage: "figure.strengthtraining.traditional", color: .pink) {
+                            PushUpTestView()
+                        }
                     }
 
                     MenuTile(title: "Settings", systemImage: "gearshape.fill", color: .gray, fullWidth: true) {
