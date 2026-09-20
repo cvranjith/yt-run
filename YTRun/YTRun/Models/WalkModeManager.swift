@@ -37,11 +37,15 @@ final class WalkModeManager: ObservableObject {
     // number by design (each check covers exactly the gap since the
     // last one), not tunable from Settings since this is meant to be a
     // sensible fixed default rather than another dial to expose.
-    private static let checkIntervalSeconds: TimeInterval = 30
-    // Deliberately low — this only needs to rule out "sitting still"
-    // (or being driven), not measure a real pace. A brief pause at a
-    // crosswalk mid-window shouldn't read as "stopped walking."
-    private static let minimumStepsToCountAsMoving = 8
+    // Originally 30s (matching the original ask) but confirmed by hand
+    // to feel too slow in practice — dropped to 5s for a much snappier
+    // pause/resume, since a real stop should be noticed in a few
+    // seconds, not up to half a minute.
+    private static let checkIntervalSeconds: TimeInterval = 5
+    // Scaled down proportionally from the original 8-per-30s — even a
+    // couple of real steps in a 5s window is a fine signal that you're
+    // still moving, without needing to measure an actual pace.
+    private static let minimumStepsToCountAsMoving = 2
 
     func start() {
         guard !isActive else { return }

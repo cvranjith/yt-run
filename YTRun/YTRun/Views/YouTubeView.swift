@@ -314,6 +314,16 @@ struct YouTubeView: View {
                 webViewStore.reactivateAudioSession()
             }
         }
+        // `isListenModeEnabled` (read by `applyListenMode`) already
+        // accounts for Walk mode forcing audio-only when
+        // `walkAllowsVideo` is off — but nothing re-evaluates that
+        // JS-side until something explicitly calls `applyListenMode`
+        // again (it's push, not polled). Without this, starting Walk
+        // mode while the video was already visible left it visible,
+        // since nothing prompted the page to actually re-check.
+        .onChange(of: walkModeManager.isActive) { _, _ in
+            webViewStore.applyListenMode()
+        }
     }
 
     // Replaces the native navigation bar's title/toolbar entirely — see
@@ -494,7 +504,8 @@ struct YouTubeView: View {
     private var walkStatusBar: some View {
         HStack(spacing: 8) {
             Image(systemName: walkModeManager.isCurrentlyMoving ? "figure.walk" : "figure.stand")
-            Text(walkModeManager.isCurrentlyMoving ? "Walking — unlocked" : "Not moving — paused")
+                .symbolEffect(.pulse, isActive: walkModeManager.isCurrentlyMoving)
+            Text(walkModeManager.isCurrentlyMoving ? "Keep walking" : "Start walking to listen/view")
                 .font(.caption)
             Spacer()
             Button("End Walk") {
@@ -506,6 +517,7 @@ struct YouTubeView: View {
         .padding(.horizontal)
         .padding(.vertical, 6)
         .background(.bar)
+        .animation(.easeInOut(duration: 0.2), value: walkModeManager.isCurrentlyMoving)
     }
 
     private var downloadProgressBar: some View {
