@@ -32,8 +32,6 @@ final class AppSettings: ObservableObject {
         static let listenRatePercent = "listenRatePercent"
         static let carRatePercent = "carRatePercent"
         static let aiGatewayURI = "aiGatewayURI"
-        static let aiGatewayClientID = "aiGatewayClientID"
-        static let aiGatewayClientSecret = "aiGatewayClientSecret"
         static let aiGatewayToken = "aiGatewayToken"
         static let chatGPTShortcutName = "chatGPTShortcutName"
         static let enableWalkOption = "enableWalkOption"
@@ -177,36 +175,24 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(carRatePercent, forKey: Keys.carRatePercent) }
     }
 
-    // Base URL of a self-hosted ai-gateway instance (see that project's
-    // own README) — e.g. "https://your-host.ts.net/gateway". Used by
-    // the YouTube screen's "Summarize" feature. Stored the same way as
-    // every other setting here (plain UserDefaults, not Keychain) —
-    // consistent with the gateway's own server-side config, which is
-    // equally plaintext-on-disk for this personal, single-user setup.
+    // Base URL of ai-router — e.g.
+    // "https://ai-router.<subdomain>.workers.dev" — branded "YTRun
+    // Gateway" in Settings/UI since it also powers Downloads, not just
+    // AI features. Stored the same way as every other setting here
+    // (plain UserDefaults, not Keychain) — consistent with the
+    // gateway's own server-side config, which is equally plaintext-on-
+    // disk for this personal, single-user setup.
     @Published var aiGatewayURI: String {
         didSet { UserDefaults.standard.set(aiGatewayURI, forKey: Keys.aiGatewayURI) }
     }
 
-    @Published var aiGatewayClientID: String {
-        didSet { UserDefaults.standard.set(aiGatewayClientID, forKey: Keys.aiGatewayClientID) }
-    }
-
-    @Published var aiGatewayClientSecret: String {
-        didSet { UserDefaults.standard.set(aiGatewayClientSecret, forKey: Keys.aiGatewayClientSecret) }
-    }
-
-    // A plain static shared bearer token — for talking to `ai-router`
-    // (a Cloudflare Worker in front of ai-gateway and, later, other
-    // backends) instead of ai-gateway directly. When this is set, both
-    // Summarize and Downloads send it as `Authorization: Bearer
-    // <token>` against `aiGatewayURI` using ai-router's request shape,
-    // skipping the OAuth2 exchange entirely — unlike that flow, this
-    // token never expires and is never refreshed; it's a fixed
-    // credential until manually rotated. Leave blank to keep using the
-    // Client ID/Secret OAuth2 flow directly against ai-gateway instead
-    // (for both features symmetrically — whichever credential is set
-    // decides the backend for everything, not just one feature, so
-    // `aiGatewayURI` only ever needs to point at one place at a time).
+    // A plain static shared bearer token — sent as `Authorization:
+    // Bearer <token>` against `aiGatewayURI` for both Summarize and
+    // Downloads. Never expires, never refreshed; a fixed credential
+    // until manually rotated. (An earlier version also supported an
+    // OAuth2 Client ID/Secret flow to a self-hosted ai-gateway
+    // directly, bypassing ai-router — removed once that path stopped
+    // being used, rather than carried along unused.)
     @Published var aiGatewayToken: String {
         didSet { UserDefaults.standard.set(aiGatewayToken, forKey: Keys.aiGatewayToken) }
     }
@@ -316,8 +302,6 @@ final class AppSettings: ObservableObject {
         self.carRatePercent = defaults.object(forKey: Keys.carRatePercent) as? Int
             ?? Defaults.carRatePercent
         self.aiGatewayURI = defaults.string(forKey: Keys.aiGatewayURI) ?? ""
-        self.aiGatewayClientID = defaults.string(forKey: Keys.aiGatewayClientID) ?? ""
-        self.aiGatewayClientSecret = defaults.string(forKey: Keys.aiGatewayClientSecret) ?? ""
         self.aiGatewayToken = defaults.string(forKey: Keys.aiGatewayToken) ?? ""
         self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
         self.enableWalkOption = defaults.bool(forKey: Keys.enableWalkOption)

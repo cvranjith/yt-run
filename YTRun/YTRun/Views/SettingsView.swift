@@ -28,9 +28,7 @@ struct SettingsView: View {
                     limitRow(title: "Daily limit", minutes: settings.dailyLimitMinutes)
                 }
             } header: {
-                Text("Daily allowance")
-            } footer: {
-                Text("Total YouTube minutes allowed per day. Resets at midnight.")
+                sectionHeader("Daily allowance", info: "Total YouTube minutes allowed per day. Resets at midnight.")
             }
 
             Section {
@@ -44,9 +42,7 @@ struct SettingsView: View {
                     limitRow(title: "Reset after break", minutes: settings.bingeResetAfterMinutes)
                 }
             } header: {
-                Text("Binge protection")
-            } footer: {
-                Text("Watching \(settings.bingeLimitMinutes) cumulative minutes (pauses don't reset it) triggers a \(settings.cooldownMinutes)-minute lockout, independent of the daily total. A run ends the cooldown early, but doesn't also add daily minutes — the two rewards don't stack. Going \(settings.bingeResetAfterMinutes) minutes without watching anything also resets the binge counter on its own, even if you never hit the limit.")
+                sectionHeader("Binge protection", info: "Watching \(settings.bingeLimitMinutes) cumulative minutes (pauses don't reset it) triggers a \(settings.cooldownMinutes)-minute lockout, independent of the daily total. A run ends the cooldown early, but doesn't also add daily minutes — the two rewards don't stack. Going \(settings.bingeResetAfterMinutes) minutes without watching anything also resets the binge counter on its own, even if you never hit the limit.")
             }
 
             Section {
@@ -54,9 +50,7 @@ struct SettingsView: View {
                     limitRow(title: "Minutes per run", minutes: settings.minutesPerRun)
                 }
             } header: {
-                Text("Run reward")
-            } footer: {
-                Text("Extra viewing minutes granted each time a qualifying run is completed (real or simulated).")
+                sectionHeader("Run reward", info: "Extra viewing minutes granted each time a qualifying run is completed (real or simulated).")
             }
 
             Section {
@@ -72,9 +66,7 @@ struct SettingsView: View {
                     limitRow(title: "Minimum duration", minutes: settings.qualifyingDurationMinutes)
                 }
             } header: {
-                Text("Qualifying run")
-            } footer: {
-                Text("A run counts if it meets EITHER the distance or the duration threshold — not both.")
+                sectionHeader("Qualifying run", info: "A run counts if it meets EITHER the distance or the duration threshold — not both.")
             }
 
             Section {
@@ -87,9 +79,7 @@ struct SettingsView: View {
                     }
                 }
             } header: {
-                Text("Calorie estimate")
-            } footer: {
-                Text("Used to roughly estimate calories burnt per run (distance × weight). Not medically precise — no heart rate data is used.")
+                sectionHeader("Calorie estimate", info: "Used to roughly estimate calories burnt per run (distance × weight). Not medically precise — no heart rate data is used.")
             }
 
             Section {
@@ -100,9 +90,7 @@ struct SettingsView: View {
                     percentRow(title: "Car rate", percent: settings.carRatePercent)
                 }
             } header: {
-                Text("Background listening rate")
-            } footer: {
-                Text("How much of your daily/binge allowance background listening actually costs, relative to watching with the screen on (always 100%). E.g. a 50% listen rate means 10 minutes of background listening only uses 5 minutes of allowance. The daily/binge limits themselves don't change — only how fast background listening eats into them.")
+                sectionHeader("Background listening rate", info: "How much of your daily/binge allowance background listening actually costs, relative to watching with the screen on (always 100%). E.g. a 50% listen rate means 10 minutes of background listening only uses 5 minutes of allowance. The daily/binge limits themselves don't change — only how fast background listening eats into them.")
             }
 
             Section {
@@ -110,21 +98,19 @@ struct SettingsView: View {
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
             } header: {
-                Text("Car Bluetooth device")
-            } footer: {
-                Text("Daily History splits background listening into \"Listen\" and \"Car.\" CarPlay is detected automatically; for a plain Bluetooth car stereo (most cars), enter its device name here (check Settings → Bluetooth on your phone) — matched as a substring, case-insensitive.")
+                sectionHeader("Car Bluetooth device", info: "Daily History splits background listening into \"Listen\" and \"Car.\" CarPlay is detected automatically; for a plain Bluetooth car stereo (most cars), enter its device name here (check Settings → Bluetooth on your phone) — matched as a substring, case-insensitive.")
             }
 
             Section {
                 Toggle("Restrict Shorts", isOn: $settings.restrictShorts)
-            } footer: {
-                Text("When on, Shorts thumbnails and shelves are hidden everywhere in the YouTube screen (home feed, search, the Shorts tab) so they can't even be previewed, and opening a Shorts link directly redirects back to the home feed. Best-effort — YouTube's markup can change, and the Shorts feed can scroll between clips without a page reload, so there may be a brief flash before a direct link redirects.")
+            } header: {
+                sectionHeader("Shorts", info: "When on, Shorts thumbnails and shelves are hidden everywhere in the YouTube screen (home feed, search, the Shorts tab) so they can't even be previewed, and opening a Shorts link directly redirects back to the home feed. Best-effort — YouTube's markup can change, and the Shorts feed can scroll between clips without a page reload, so there may be a brief flash before a direct link redirects.")
             }
 
             Section {
                 Toggle("Show Simulate Run Button", isOn: $settings.enableSimulateRun)
-            } footer: {
-                Text("When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself — using it once turns this back off automatically, so it doesn't just sit there armed.")
+            } header: {
+                sectionHeader("Simulate Run", info: "When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself — using it once turns this back off automatically, so it doesn't just sit there armed.")
             }
 
             Section {
@@ -132,8 +118,8 @@ struct SettingsView: View {
                 if settings.enableWalkOption {
                     Toggle("Allow Video While Walking", isOn: $settings.walkAllowsVideo)
                 }
-            } footer: {
-                Text("Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, live against your actual step count (a real step resumes it right away; about 8 seconds with none pauses it, with a \"Not moving\" notice, until you start again). Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
+            } header: {
+                sectionHeader("Walk", info: "Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, live against your actual step count (a real step resumes it right away; about 8 seconds with none pauses it, with a \"Not moving\" notice, until you start again). Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
             }
 
             Section {
@@ -158,8 +144,8 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } footer: {
-                Text("Each adds an option to the Locked screen's Exercise picker — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, these are banked rewards like a run: every \(settings.repsPerExerciseSet) counted reps of any of them earns \(settings.secondsPerExerciseSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run). All three share this one reps/reward setting.")
+            } header: {
+                sectionHeader("Exercises", info: "Each adds an option to the Locked screen's Exercise picker — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, these are banked rewards like a run: every \(settings.repsPerExerciseSet) counted reps of any of them earns \(settings.secondsPerExerciseSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run). All three share this one reps/reward setting.")
             }
 
             Section {
@@ -182,22 +168,18 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } footer: {
-                Text("Adds a \"Climb Stairs\" option to the Locked screen's Exercise picker — counted via the phone's barometer (the same signal Apple's own Fitness app uses for \"Flights Climbed\"), no camera involved at all. Every \(settings.floorsPerStairSet) floors earns \(settings.secondsPerStairSet) seconds, same claim-explicitly rule as the other exercises.")
+            } header: {
+                sectionHeader("Stairs", info: "Adds a \"Climb Stairs\" option to the Locked screen's Exercise picker — counted via the phone's barometer (the same signal Apple's own Fitness app uses for \"Flights Climbed\"), no camera involved at all. Every \(settings.floorsPerStairSet) floors earns \(settings.secondsPerStairSet) seconds, same claim-explicitly rule as the other exercises.")
             }
 
             Section {
-                TextField("https://your-host/gateway", text: $settings.aiGatewayURI)
+                TextField("https://your-router.workers.dev", text: $settings.aiGatewayURI)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
-                SecureField("Token (for ai-router)", text: $settings.aiGatewayToken)
+                SecureField("Token", text: $settings.aiGatewayToken)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                TextField("Client ID", text: $settings.aiGatewayClientID)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("Client Secret", text: $settings.aiGatewayClientSecret)
                 Button {
                     Task { await testConnection() }
                 } label: {
@@ -209,9 +191,7 @@ struct SettingsView: View {
                 }
                 .disabled(isTestingConnection)
             } header: {
-                Text("AI Gateway")
-            } footer: {
-                Text("Powers \"Summarize\" and Downloads on the YouTube screen. If Token is set, both route through ai-router at this URL instead of ai-gateway directly — no expiry, nothing to refresh. Leave Token blank to keep using Client ID/Secret (from your ai-gateway's /ui dashboard) for the direct OAuth2 flow instead, for both features.")
+                sectionHeader("YTRun Gateway", info: "Powers \"Summarize\" and Downloads on the YouTube screen. URL and Token are both required — see ai-router's own README for how to set these up.")
             }
 
             Section {
@@ -219,17 +199,15 @@ struct SettingsView: View {
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
             } header: {
-                Text("ChatGPT Shortcut")
-            } footer: {
-                Text("Powers \"Summarize via ChatGPT\" on the YouTube screen — a peer alternative to AI Gateway that uses your own ChatGPT app via a Shortcut, with no server involved. Must exactly match the Shortcut's name in the Shortcuts app. See chatgpt-shortcut-setup.md for how to build it.")
+                sectionHeader("ChatGPT Shortcut", info: "Powers \"Summarize via ChatGPT\" on the YouTube screen — a peer alternative to YTRun Gateway that uses your own ChatGPT app via a Shortcut, with no server involved. Must exactly match the Shortcut's name in the Shortcuts app. See chatgpt-shortcut-setup.md for how to build it.")
             }
 
             Section {
                 Button("Clear YouTube Data", role: .destructive) {
                     showingClearDataConfirmation = true
                 }
-            } footer: {
-                Text("Signs you out of YouTube in the app (if signed in) and resets anything YouTube remembers client-side — including a stuck autoplay-unmuted preference, if that happens again.")
+            } header: {
+                sectionHeader("YouTube Data", info: "Signs you out of YouTube in the app (if signed in) and resets anything YouTube remembers client-side — including a stuck autoplay-unmuted preference, if that happens again.")
             }
 
             Section {
@@ -253,9 +231,7 @@ struct SettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } header: {
-                Text("Developer debug options")
-            } footer: {
-                Text("Quickly push usage toward the limits without waiting, to test the Locked screen.")
+                sectionHeader("Developer debug options", info: "Quickly push usage toward the limits without waiting, to test the Locked screen.")
             }
         }
         .navigationTitle("Settings")
@@ -281,7 +257,7 @@ struct SettingsView: View {
         } message: {
             Text("This signs you out of YouTube in the app and resets anything it remembers client-side.")
         }
-        .alert("AI Gateway", isPresented: Binding(
+        .alert("YTRun Gateway", isPresented: Binding(
             get: { connectionTestMessage != nil },
             set: { if !$0 { connectionTestMessage = nil } }
         )) {
@@ -300,6 +276,17 @@ struct SettingsView: View {
             connectionTestMessage = "Connected successfully."
         case .failure(let error):
             connectionTestMessage = error.message
+        }
+    }
+
+    // Every section header is a title plus a trailing info bubble
+    // holding what used to be permanently-visible footer text — same
+    // content, shown on demand instead of always taking up space.
+    private func sectionHeader(_ title: String, info: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            InfoButton(text: info)
         }
     }
 
