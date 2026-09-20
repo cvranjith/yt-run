@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import AVFoundation
 import Vision
+import UIKit
 
 // Counts push-up reps entirely on-device via Vision's body pose
 // tracking — no AI/LLM call, no video ever leaving the device, no
@@ -44,16 +45,28 @@ final class PushUpCounter: NSObject, ObservableObject {
     private let processingQueue = DispatchQueue(label: "com.ranjith.ytrun.pushupcounter.processing")
     private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var isConfigured = false
-    // Mirrors `currentCameraPosition` for the nonisolated capture
-    // callback to read — written and read only from `processingQueue`
-    // (set inside `flipCamera`'s queued block, right alongside the
-    // actual camera swap), so there's no real race despite the
-    // annotation just being about crossing the main-actor boundary.
-    // The front and back cameras are mounted rotated the same way but
-    // facing opposite directions, so in portrait the front camera's
-    // raw buffer needs the *mirrored* orientation variant to be
-    // interpreted correctly, unlike the back camera's plain `.right`.
-    nonisolated(unsafe) private var visionOrientation: CGImagePropertyOrientation = .leftMirrored
+
+    // Guessing at a *mirrored* orientation constant for the front
+    // camera (an earlier version of this file) turned out unreliable
+    // in practice — instead, mirroring is force-disabled on the output
+    // connection (see `configureMirroring`) so both cameras always
+    // deliver a plain, unmirrored buffer, needing only one rotation-only
+    // orientation table for either camera (see `visionOrientation`
+    // below) rather than separate guessed mirrored/unmirrored variants
+    // per camera.
+    //
+    // Read by the nonisolated capture callback, written by the device-
+    // orientation notification handler — both benign single-enum
+    // writes/reads, so `nonisolated(unsafe)` here just crosses the
+    // main-actor boundary type-check, not a real race.
+    nonisolated(unsafe) private var currentDeviceOrientation: UIDeviceOrientation = .portrait
+    // Mirror of the same value, published for the preview to visually
+    // counter-rotate by (see PushUpTestView) — the SwiftUI view itself
+    // doesn't rotate to landscape, so without this the on-screen
+    // preview looks sideways whenever the phone is physically turned,
+    // even though the *detection* is already reading the phone's real
+    // orientation correctly via `currentDeviceOrientation` above.
+    @Published private(set) var deviceOrientation: UIDeviceOrientation = .portrait
 
     private enum Phase {
         case up, down
@@ -110,6 +123,8 @@ final class PushUpCounter: NSObject, ObservableObject {
     }
 
     func stop() {
+        UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.removeObserver(self, name: UIDevice.orientationDidChangeNotification, object: nil)
         processingQueue.async { [session] in
             if session.isRunning { session.stopRunning() }
         }
@@ -126,11 +141,11 @@ final class PushUpCounter: NSObject, ObservableObject {
         currentCameraPosition = newPosition
         processingQueue.async { [weak self] in
             guard let self else { return }
-            self.visionOrientation = newPosition == .back ? .right : .leftMirrored
             self.session.beginConfiguration()
             for input in self.session.inputs { self.session.removeInput(input) }
             self.addCameraInput()
             self.session.commitConfiguration()
+            self.configureMirroring()
         }
     }
 
@@ -148,6 +163,8 @@ final class PushUpCounter: NSObject, ObservableObject {
         }
         session.commitConfiguration()
         previewLayer.session = session
+        configureMirroring()
+        beginObservingDeviceOrientation()
     }
 
     private func addCameraInput() {
@@ -157,10 +174,51 @@ final class PushUpCounter: NSObject, ObservableObject {
         session.addInput(input)
     }
 
+    // Forces a known, unmirrored buffer on the data-output connection
+    // regardless of camera position — see the property comment on
+    // `currentDeviceOrientation` above for why this replaced guessing
+    // at per-camera mirrored orientation constants. Must run after the
+    // output (and, for a flip, the new input) is actually attached to
+    // the session, since the connection doesn't exist before that.
+    private func configureMirroring() {
+        guard let connection = videoOutput.connection(with: .video) else { return }
+        connection.automaticallyAdjustsVideoMirroring = false
+        if connection.isVideoMirroringSupported {
+            connection.isVideoMirrored = false
+        }
+    }
+
     private func startSession() {
         processingQueue.async { [session] in
             if !session.isRunning { session.startRunning() }
         }
+    }
+
+    // MARK: - Device orientation
+
+    private func beginObservingDeviceOrientation() {
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(deviceOrientationDidChange),
+            name: UIDevice.orientationDidChangeNotification,
+            object: nil
+        )
+        applyDeviceOrientation(UIDevice.current.orientation)
+    }
+
+    @objc private func deviceOrientationDidChange() {
+        applyDeviceOrientation(UIDevice.current.orientation)
+    }
+
+    private func applyDeviceOrientation(_ orientation: UIDeviceOrientation) {
+        // Face-up/face-down/unknown aren't real rotations to track by —
+        // keep whichever last valid rotation was seen (almost certainly
+        // still how the phone is actually propped) rather than resetting
+        // to some default.
+        guard orientation.isValidInterfaceOrientation else { return }
+        currentDeviceOrientation = orientation
+        deviceOrientation = orientation
     }
 
     // MARK: - Rep counting
@@ -214,6 +272,22 @@ final class PushUpCounter: NSObject, ObservableObject {
         let cosAngle = max(-1, min(1, dot / (magShoulder * magWrist)))
         return acos(cosAngle) * 180 / .pi
     }
+
+    // Rotation-only — both cameras use the same table since mirroring
+    // is force-disabled uniformly (see `configureMirroring`). This is
+    // the standard mapping for a raw, unmirrored `AVCaptureVideoDataOutput`
+    // buffer: the sensor is physically mounted rotated 90° relative to
+    // the portrait screen, so "portrait" needs a 90° correction, and
+    // each other case rotates from there.
+    nonisolated private static func visionOrientation(for deviceOrientation: UIDeviceOrientation) -> CGImagePropertyOrientation {
+        switch deviceOrientation {
+        case .portrait: return .right
+        case .portraitUpsideDown: return .left
+        case .landscapeLeft: return .up
+        case .landscapeRight: return .down
+        default: return .right
+        }
+    }
 }
 
 extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
@@ -236,10 +310,10 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
         // reliability (its pose model expects an upright image) rather
         // than the angle math afterward — an unsigned angle from three
         // relative points stays numerically correct under any
-        // consistent rotation/mirroring of the input, which is why an
-        // earlier version of this worked passably even with a
-        // fixed-wrong orientation for the front camera.
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: visionOrientation, options: [:])
+        // consistent rotation of the input, which is why this tracked
+        // passably even before landscape support existed at all.
+        let orientation = Self.visionOrientation(for: currentDeviceOrientation)
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         try? handler.perform([request])
 
         guard let observation = request.results?.first,

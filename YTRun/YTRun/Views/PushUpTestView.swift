@@ -20,8 +20,18 @@ struct PushUpTestView: View {
             Color.black.ignoresSafeArea()
 
             if counter.authorizationStatus == .authorized {
+                // This view never actually rotates to a landscape
+                // layout (the app is portrait-only), so without this
+                // the raw preview looks sideways whenever the phone is
+                // physically turned to landscape — this just visually
+                // counter-rotates the already-captured content back to
+                // upright within the still-portrait-shaped frame. Purely
+                // cosmetic: PushUpCounter's own orientation handling
+                // (see its `visionOrientation`) is what actually keeps
+                // detection correct, independent of this.
                 CameraPreviewView(previewLayer: counter.previewLayer)
                     .ignoresSafeArea()
+                    .rotationEffect(.degrees(previewRotationDegrees))
             }
 
             VStack {
@@ -72,6 +82,20 @@ struct PushUpTestView: View {
         .toolbarBackground(.visible, for: .navigationBar)
         .onAppear { counter.requestAccessAndStart() }
         .onDisappear { counter.stop() }
+    }
+
+    // If this ends up rotating the wrong way in practice, the fix is
+    // just flipping the sign on the two landscape cases — this is a
+    // best-guess pairing with PushUpCounter's own rotation table, not
+    // independently verified on-device.
+    private var previewRotationDegrees: Double {
+        switch counter.deviceOrientation {
+        case .portrait: return 0
+        case .portraitUpsideDown: return 180
+        case .landscapeLeft: return -90
+        case .landscapeRight: return 90
+        default: return 0
+        }
     }
 }
 
