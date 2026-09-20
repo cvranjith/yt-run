@@ -68,6 +68,16 @@ final class PushUpCounter: NSObject, ObservableObject {
     // orientation correctly via `currentDeviceOrientation` above.
     @Published private(set) var deviceOrientation: UIDeviceOrientation = .portrait
 
+    // Auto-detection from `deviceOrientation` got landscape wrong in
+    // practice (no reliable way to verify the exact rotation mapping
+    // without a physical device in hand) — this lets it be corrected
+    // empirically instead of guessed at again. `nil` means "use the
+    // auto-detected value"; once set, it overrides that regardless of
+    // further device rotation, until cycled back to `nil`.
+    @Published private(set) var manualOrientationOverride: CGImagePropertyOrientation?
+    nonisolated(unsafe) private var manualOrientationOverrideForCapture: CGImagePropertyOrientation?
+    private static let manualOverrideCycle: [CGImagePropertyOrientation?] = [nil, .up, .right, .down, .left]
+
     private enum Phase {
         case up, down
     }
@@ -134,6 +144,16 @@ final class PushUpCounter: NSObject, ObservableObject {
         repCount = 0
         phase = .up
         recentAngles = []
+    }
+
+    // Steps through [Auto, Up, Right, Down, Left] each tap — keep
+    // tapping until "Body detected" turns on and stays on, whatever
+    // physical orientation the phone is actually in.
+    func cycleManualOrientation() {
+        let currentIndex = Self.manualOverrideCycle.firstIndex(where: { $0 == manualOrientationOverride }) ?? 0
+        let next = Self.manualOverrideCycle[(currentIndex + 1) % Self.manualOverrideCycle.count]
+        manualOrientationOverride = next
+        manualOrientationOverrideForCapture = next
     }
 
     func flipCamera() {
@@ -312,7 +332,7 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
         // relative points stays numerically correct under any
         // consistent rotation of the input, which is why this tracked
         // passably even before landscape support existed at all.
-        let orientation = Self.visionOrientation(for: currentDeviceOrientation)
+        let orientation = manualOrientationOverrideForCapture ?? Self.visionOrientation(for: currentDeviceOrientation)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         try? handler.perform([request])
 

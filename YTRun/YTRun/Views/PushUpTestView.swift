@@ -21,17 +21,27 @@ struct PushUpTestView: View {
 
             if counter.authorizationStatus == .authorized {
                 // This view never actually rotates to a landscape
-                // layout (the app is portrait-only), so without this
-                // the raw preview looks sideways whenever the phone is
-                // physically turned to landscape — this just visually
-                // counter-rotates the already-captured content back to
-                // upright within the still-portrait-shaped frame. Purely
-                // cosmetic: PushUpCounter's own orientation handling
-                // (see its `visionOrientation`) is what actually keeps
-                // detection correct, independent of this.
-                CameraPreviewView(previewLayer: counter.previewLayer)
-                    .ignoresSafeArea()
-                    .rotationEffect(.degrees(previewRotationDegrees))
+                // layout (the app is portrait-only), so the preview
+                // has to reshape itself explicitly: swap width/height
+                // to match the phone's real orientation, then rotate
+                // that correctly-shaped block back to upright and
+                // center it within the still-portrait screen —
+                // otherwise a landscape capture just spins in place
+                // inside a fixed tall/narrow frame, which is what
+                // looked broken before. Still purely cosmetic;
+                // PushUpCounter's own orientation handling is what
+                // actually keeps detection correct, independent of
+                // this.
+                GeometryReader { geo in
+                    CameraPreviewView(previewLayer: counter.previewLayer)
+                        .frame(
+                            width: isLandscape ? geo.size.height : geo.size.width,
+                            height: isLandscape ? geo.size.width : geo.size.height
+                        )
+                        .rotationEffect(.degrees(previewRotationDegrees))
+                        .frame(width: geo.size.width, height: geo.size.height)
+                }
+                .ignoresSafeArea()
             }
 
             VStack {
@@ -48,10 +58,15 @@ struct PushUpTestView: View {
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.8))
                     }
-                    HStack(spacing: 20) {
+                    Text("Orientation: \(orientationLabel)")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.6))
+                    HStack(spacing: 16) {
                         Button("Reset") { counter.reset() }
                             .buttonStyle(.bordered)
                         Button("Flip Camera") { counter.flipCamera() }
+                            .buttonStyle(.bordered)
+                        Button("Fix Orientation") { counter.cycleManualOrientation() }
                             .buttonStyle(.bordered)
                     }
                     .tint(.white)
@@ -84,10 +99,15 @@ struct PushUpTestView: View {
         .onDisappear { counter.stop() }
     }
 
+    private var isLandscape: Bool {
+        counter.deviceOrientation == .landscapeLeft || counter.deviceOrientation == .landscapeRight
+    }
+
     // If this ends up rotating the wrong way in practice, the fix is
     // just flipping the sign on the two landscape cases — this is a
     // best-guess pairing with PushUpCounter's own rotation table, not
-    // independently verified on-device.
+    // independently verified on-device. "Fix Orientation" below exists
+    // precisely because that table needed correcting once already.
     private var previewRotationDegrees: Double {
         switch counter.deviceOrientation {
         case .portrait: return 0
@@ -95,6 +115,17 @@ struct PushUpTestView: View {
         case .landscapeLeft: return -90
         case .landscapeRight: return 90
         default: return 0
+        }
+    }
+
+    private var orientationLabel: String {
+        guard let override = counter.manualOrientationOverride else { return "Auto" }
+        switch override {
+        case .up: return "Manual: Up"
+        case .down: return "Manual: Down"
+        case .left: return "Manual: Left"
+        case .right: return "Manual: Right"
+        default: return "Manual"
         }
     }
 }
