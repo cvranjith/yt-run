@@ -185,16 +185,17 @@ struct YouTubeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
-        // Let the web content run under the status bar/notch area too,
-        // since the page has its own chrome — the toolbar is now at the
-        // bottom (see body), so it's the *top* edge that's free to be
-        // ignored here, not the bottom (which the toolbar should sit
-        // above, clear of the home indicator, like a normal footer). In
-        // DIY fullscreen, ignore every edge instead, and hide the
-        // system status bar too — the expanded player (see
-        // `forceElementFullscreenJS`) should fill the whole screen with
-        // nothing else competing for space.
-        .ignoresSafeArea(edges: webViewStore.isCustomFullscreen ? .all : .top)
+        // Originally ignored the top safe area unconditionally too, on
+        // the assumption the page's own chrome would clear the status
+        // bar/notch itself — in practice, YouTube's own search bar/top
+        // toolbar sits right under the status bar in portrait, making
+        // it unclickable there. So the top edge is only ignored in DIY
+        // fullscreen now (where every edge is ignored and the system
+        // status bar is hidden too — the expanded player, see
+        // `forceElementFullscreenJS`, should fill the whole screen with
+        // nothing else competing for space); otherwise the safe area is
+        // respected normally, same as any other screen.
+        .ignoresSafeArea(edges: webViewStore.isCustomFullscreen ? .all : [])
         .statusBarHidden(webViewStore.isCustomFullscreen)
         .sheet(isPresented: $isShowingURLEntry) {
             openURLSheet

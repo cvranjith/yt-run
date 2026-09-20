@@ -61,7 +61,15 @@ xcrun devicectl list devices --json-output "$DEVICES_JSON" --omit-deprecated-fie
 # actually matters here: any *targeted* devicectl operation against a
 # paired device's UDID (an actual build/install, same as the one below)
 # transparently re-establishes the tunnel on demand.
-DEVICE_ID=$(jq -r '[.result.devices[] | select(.properties.connection.pairingState == "paired")][0].properties.hardware.udid // empty' "$DEVICES_JSON")
+#
+# Also requires `hardware.reality == "physical"` — confirmed by hand, a
+# Simulator device reports `pairingState: "paired"` too on this Xcode
+# version (there's no real pairing concept for it, but the field isn't
+# just absent), and one sorting ahead of the real iPhone in the device
+# list picked it instead, which then fails at the install step with "The
+# capability 'Install Application' is not supported by this device."
+# mac_deploy.py's own device lookup had the same bug independently.
+DEVICE_ID=$(jq -r '[.result.devices[] | select(.properties.connection.pairingState == "paired" and .properties.hardware.reality == "physical")][0].properties.hardware.udid // empty' "$DEVICES_JSON")
 if [ -z "$DEVICE_ID" ]; then
   echo "No paired device found. Plug in your iPhone via USB and unlock it, or pair it once over USB for future Wi-Fi use." >&2
   exit 1
