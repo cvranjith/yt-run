@@ -28,12 +28,36 @@ import UIKit
 // toward/away from the lens, which 2D-only tracking can't see — but
 // isn't the more practical setup, and testing showed front-on tracks
 // well enough anyway.
+// One frame's worth of what Vision actually saw, for the test screen's
+// debug panel — deliberately kept in Vision's own raw normalized
+// coordinate space (0...1, origin bottom-left) rather than mapped onto
+// the live camera preview's own coordinates, which would need the same
+// rotation/aspect-fill transform the orientation handling above has
+// already gotten wrong twice without a device to verify against. This
+// stays correct by construction, at the cost of not being literally
+// overlaid on your body in the preview.
+struct PoseDebugInfo {
+    let usingRightSide: Bool
+    let shoulder: CGPoint
+    let elbow: CGPoint
+    let wrist: CGPoint
+    let shoulderConfidence: Float
+    let elbowConfidence: Float
+    let wristConfidence: Float
+}
+
 @MainActor
 final class PushUpCounter: NSObject, ObservableObject {
     @Published private(set) var repCount = 0
     @Published private(set) var currentAngle: Double?
     @Published private(set) var isBodyVisible = false
     @Published private(set) var authorizationStatus: AVAuthorizationStatus = .notDetermined
+    @Published private(set) var debugInfo: PoseDebugInfo?
+    // Mirrors the private `phase` enum below for display — kept as a
+    // separate published string rather than making `phase` itself
+    // published, since the state machine only needs to read/write it,
+    // not react to its own changes.
+    @Published private(set) var phaseLabel = "Up"
 
     let previewLayer = AVCaptureVideoPreviewLayer()
 
@@ -91,7 +115,10 @@ final class PushUpCounter: NSObject, ObservableObject {
     // have been tested against them.
     private static let downThresholdDegrees = 100.0
     private static let upThresholdDegrees = 155.0
-    private static let minimumJointConfidence: Float = 0.3
+    // Not private — PushUpTestView's debug panel colors confidence
+    // readouts against this exact same number, rather than duplicating
+    // the value and risking the two drifting apart.
+    static let minimumJointConfidence: Float = 0.3
     // Smooths single-frame jitter in the raw angle reading.
     private static let smoothingWindowSize = 3
     // Vision on every single camera frame (~30fps) is more than this
@@ -143,6 +170,7 @@ final class PushUpCounter: NSObject, ObservableObject {
     func reset() {
         repCount = 0
         phase = .up
+        phaseLabel = "Up"
         recentAngles = []
     }
 
@@ -257,11 +285,24 @@ final class PushUpCounter: NSObject, ObservableObject {
         }
     }
 
+    private struct PoseSample {
+        // nil when a side was found but its confidence is below
+        // threshold — the frame still isn't fed to the rep-counting
+        // state machine, but `debugInfo` is populated regardless so the
+        // exact moment/reason confidence drops (e.g. right at the
+        // bottom of a rep) is actually visible instead of the debug
+        // panel just going blank at the moment it matters most.
+        let angle: Double?
+        let debugInfo: PoseDebugInfo
+    }
+
     // Pure function, no instance state touched — marked `nonisolated`
     // so `captureOutput` (itself `nonisolated`, running on
     // `processingQueue`) can call it synchronously without hopping to
-    // the main actor just to do CPU math.
-    nonisolated private static func elbowAngle(from observation: VNHumanBodyPoseObservation) -> Double? {
+    // the main actor just to do CPU math. Returns confidences/positions
+    // alongside the angle now (not just the angle) so the test screen
+    // can show *why* a frame was or wasn't usable.
+    nonisolated private static func poseSample(from observation: VNHumanBodyPoseObservation) -> PoseSample? {
         func point(_ joint: VNHumanBodyPoseObservation.JointName) -> VNRecognizedPoint? {
             try? observation.recognizedPoint(joint)
         }
@@ -273,24 +314,46 @@ final class PushUpCounter: NSObject, ObservableObject {
         let leftConfidence = min(confidence(.leftShoulder), confidence(.leftElbow), confidence(.leftWrist))
         let useRight = rightConfidence >= leftConfidence
         let minConfidence = useRight ? rightConfidence : leftConfidence
-        guard minConfidence >= minimumJointConfidence else { return nil }
 
         let joints: (shoulder: VNHumanBodyPoseObservation.JointName, elbow: VNHumanBodyPoseObservation.JointName, wrist: VNHumanBodyPoseObservation.JointName) =
             useRight ? (.rightShoulder, .rightElbow, .rightWrist) : (.leftShoulder, .leftElbow, .leftWrist)
 
-        guard let shoulder = point(joints.shoulder)?.location,
-              let elbow = point(joints.elbow)?.location,
-              let wrist = point(joints.wrist)?.location else { return nil }
+        // Still nil here means Vision didn't locate this joint at all
+        // (as opposed to locating it with low confidence) — genuinely
+        // nothing to show or compute from.
+        guard let shoulderPoint = point(joints.shoulder),
+              let elbowPoint = point(joints.elbow),
+              let wristPoint = point(joints.wrist) else { return nil }
+        let shoulder = shoulderPoint.location
+        let elbow = elbowPoint.location
+        let wrist = wristPoint.location
+
+        let debugInfo = PoseDebugInfo(
+            usingRightSide: useRight,
+            shoulder: shoulder,
+            elbow: elbow,
+            wrist: wrist,
+            shoulderConfidence: shoulderPoint.confidence,
+            elbowConfidence: elbowPoint.confidence,
+            wristConfidence: wristPoint.confidence
+        )
+
+        guard minConfidence >= minimumJointConfidence else {
+            return PoseSample(angle: nil, debugInfo: debugInfo)
+        }
 
         let toShoulder = CGVector(dx: shoulder.x - elbow.x, dy: shoulder.y - elbow.y)
         let toWrist = CGVector(dx: wrist.x - elbow.x, dy: wrist.y - elbow.y)
         let magShoulder = sqrt(toShoulder.dx * toShoulder.dx + toShoulder.dy * toShoulder.dy)
         let magWrist = sqrt(toWrist.dx * toWrist.dx + toWrist.dy * toWrist.dy)
-        guard magShoulder > 0, magWrist > 0 else { return nil }
+        guard magShoulder > 0, magWrist > 0 else {
+            return PoseSample(angle: nil, debugInfo: debugInfo)
+        }
 
         let dot = toShoulder.dx * toWrist.dx + toShoulder.dy * toWrist.dy
         let cosAngle = max(-1, min(1, dot / (magShoulder * magWrist)))
-        return acos(cosAngle) * 180 / .pi
+        let angle = acos(cosAngle) * 180 / .pi
+        return PoseSample(angle: angle, debugInfo: debugInfo)
     }
 
     // Rotation-only — both cameras use the same table since mirroring
@@ -337,14 +400,22 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
         try? handler.perform([request])
 
         guard let observation = request.results?.first,
-              let angle = Self.elbowAngle(from: observation) else {
-            Task { @MainActor [weak self] in self?.isBodyVisible = false }
+              let sample = Self.poseSample(from: observation) else {
+            Task { @MainActor [weak self] in
+                self?.isBodyVisible = false
+                self?.debugInfo = nil
+            }
             return
         }
 
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.isBodyVisible = true
+            self.debugInfo = sample.debugInfo
+            // A low-confidence frame (angle == nil) is skipped for
+            // counting purposes but still shown above — this is
+            // exactly the case worth watching for around a missed rep.
+            guard let angle = sample.angle else { return }
             self.recentAngles.append(angle)
             if self.recentAngles.count > Self.smoothingWindowSize {
                 self.recentAngles.removeFirst()
@@ -352,6 +423,7 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
             let smoothed = self.recentAngles.reduce(0, +) / Double(self.recentAngles.count)
             self.currentAngle = smoothed
             self.processAngle(smoothed)
+            self.phaseLabel = self.phase == .up ? "Up" : "Down"
         }
     }
 }
