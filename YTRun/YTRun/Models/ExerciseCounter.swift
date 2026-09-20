@@ -1,5 +1,5 @@
 //
-//  PushUpCounter.swift
+//  ExerciseCounter.swift
 //  YTRun
 //
 
@@ -9,45 +9,116 @@ import AVFoundation
 import Vision
 import UIKit
 
-// Counts push-up reps entirely on-device via Vision's body pose
-// tracking — no AI/LLM call, no video ever leaving the device, no
-// per-use cost. The whole thing is a deterministic state machine on
-// top of one number: the angle at the elbow (shoulder-elbow-wrist),
-// which cycles roughly 180° (arm straight, "up") down to under 100°
-// (arm bent, "down") and back for every real rep. Whichever arm side
-// Vision is more confident about each frame is used — a single-camera
-// side-profile view of a push-up naturally only shows one arm clearly
-// anyway.
-//
-// Defaults to the front camera in portrait — confirmed by hand to
-// track reliably, and it matches how the phone would actually be
-// propped in practice (facing you, roughly at floor/chest height).
-// A pure side-profile view (landscape, phone to the side) should be
-// *more* geometrically precise in principle — the elbow's bend then
-// happens mostly within the camera's 2D plane rather than partly
-// toward/away from the lens, which 2D-only tracking can't see — but
-// isn't the more practical setup, and testing showed front-on tracks
-// well enough anyway.
+// Which camera-tracked exercise a given `ExerciseCounter` is counting.
+// All three share the exact same technique — Vision's body-pose
+// tracking gives a set of 2D joint positions; the angle at one joint
+// ("vertex"), formed by the rays to two others ("pointA"/"pointB"),
+// cycles between an extended and a folded position once per rep. Only
+// *which* three joints define that angle differs between exercises.
+enum ExerciseKind: String, CaseIterable, Identifiable {
+    case pushUps, sitUps, lunges
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .pushUps: return "Push-Ups"
+        case .sitUps: return "Sit-Ups"
+        case .lunges: return "Lunges"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .pushUps: return "figure.strengthtraining.traditional"
+        case .sitUps: return "figure.core.training"
+        case .lunges: return "figure.mixed.cardio"
+        }
+    }
+
+    // Labels for the debug panel — matching whichever three joints
+    // this exercise actually tracks.
+    var pointALabel: String {
+        switch self {
+        case .pushUps, .sitUps: return "Shoulder"
+        case .lunges: return "Hip"
+        }
+    }
+
+    var vertexLabel: String {
+        switch self {
+        case .pushUps: return "Elbow"
+        case .sitUps: return "Hip"
+        case .lunges: return "Knee"
+        }
+    }
+
+    var pointBLabel: String {
+        switch self {
+        case .pushUps: return "Wrist"
+        case .sitUps, .lunges: return "Knee"
+        }
+    }
+
+    // (pointA, vertex, pointB) for one side — push-ups: shoulder-elbow-
+    // wrist; sit-ups: shoulder-hip-knee; lunges: hip-knee-ankle.
+    func joints(useRight: Bool) -> (
+        pointA: VNHumanBodyPoseObservation.JointName,
+        vertex: VNHumanBodyPoseObservation.JointName,
+        pointB: VNHumanBodyPoseObservation.JointName
+    ) {
+        switch self {
+        case .pushUps:
+            return useRight ? (.rightShoulder, .rightElbow, .rightWrist) : (.leftShoulder, .leftElbow, .leftWrist)
+        case .sitUps:
+            return useRight ? (.rightShoulder, .rightHip, .rightKnee) : (.leftShoulder, .leftHip, .leftKnee)
+        case .lunges:
+            return useRight ? (.rightHip, .rightKnee, .rightAnkle) : (.leftHip, .leftKnee, .leftAnkle)
+        }
+    }
+}
+
 // One frame's worth of what Vision actually saw, for the test screen's
 // debug panel — deliberately kept in Vision's own raw normalized
 // coordinate space (0...1, origin bottom-left) rather than mapped onto
 // the live camera preview's own coordinates, which would need the same
-// rotation/aspect-fill transform the orientation handling above has
-// already gotten wrong twice without a device to verify against. This
-// stays correct by construction, at the cost of not being literally
-// overlaid on your body in the preview.
+// rotation/aspect-fill transform that's already been gotten wrong
+// twice without a device to verify against. This stays correct by
+// construction, at the cost of not being literally overlaid on your
+// body in the preview.
 struct PoseDebugInfo {
     let usingRightSide: Bool
-    let shoulder: CGPoint
-    let elbow: CGPoint
-    let wrist: CGPoint
-    let shoulderConfidence: Float
-    let elbowConfidence: Float
-    let wristConfidence: Float
+    let pointA: CGPoint
+    let vertex: CGPoint
+    let pointB: CGPoint
+    let pointAConfidence: Float
+    let vertexConfidence: Float
+    let pointBConfidence: Float
 }
 
+// Counts reps of a given `ExerciseKind` entirely on-device via Vision's
+// body pose tracking — no AI/LLM call, no video ever leaving the
+// device, no per-use cost. The whole thing is a deterministic state
+// machine on top of one number: the angle at the exercise's vertex
+// joint, which cycles from an extended position (~180°) to a folded one
+// (under ~100°) and back for every real rep. Whichever side (left/
+// right) Vision is more confident about each frame is used — a single-
+// camera side-profile view naturally only shows one side clearly
+// anyway.
+//
+// Defaults to the front camera in portrait — confirmed by hand to
+// track push-ups reliably, and it matches how the phone would actually
+// be propped in practice (facing you, roughly at floor/chest height).
+// A pure side-profile view (landscape, phone to the side) should be
+// *more* geometrically precise in principle — the tracked joint's bend
+// then happens mostly within the camera's 2D plane rather than partly
+// toward/away from the lens, which 2D-only tracking can't see — but
+// isn't the more practical setup, and testing showed front-on tracks
+// well enough anyway.
 @MainActor
-final class PushUpCounter: NSObject, ObservableObject {
+final class ExerciseCounter: NSObject, ObservableObject {
+    nonisolated let kind: ExerciseKind
+
     @Published private(set) var repCount = 0
     @Published private(set) var currentAngle: Double?
     @Published private(set) var isBodyVisible = false
@@ -66,18 +137,17 @@ final class PushUpCounter: NSObject, ObservableObject {
     // Vision inference is real CPU work — kept off the main actor
     // entirely (see the `nonisolated` delegate method below) so it
     // never competes with the UI/preview rendering.
-    private let processingQueue = DispatchQueue(label: "com.ranjith.ytrun.pushupcounter.processing")
+    private let processingQueue = DispatchQueue(label: "com.ranjith.ytrun.exercisecounter.processing")
     private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var isConfigured = false
 
-    // Guessing at a *mirrored* orientation constant for the front
-    // camera (an earlier version of this file) turned out unreliable
-    // in practice — instead, mirroring is force-disabled on the output
-    // connection (see `configureMirroring`) so both cameras always
-    // deliver a plain, unmirrored buffer, needing only one rotation-only
-    // orientation table for either camera (see `visionOrientation`
-    // below) rather than separate guessed mirrored/unmirrored variants
-    // per camera.
+    // Mirroring is force-disabled on the output connection (see
+    // `configureMirroring`) so both cameras always deliver a plain,
+    // unmirrored buffer, needing only one rotation-only orientation
+    // table for either camera (see `visionOrientation` below) — an
+    // earlier version guessed at a separate *mirrored* constant for the
+    // front camera specifically, which turned out unreliable in
+    // practice.
     //
     // Read by the nonisolated capture callback, written by the device-
     // orientation notification handler — both benign single-enum
@@ -85,8 +155,8 @@ final class PushUpCounter: NSObject, ObservableObject {
     // main-actor boundary type-check, not a real race.
     nonisolated(unsafe) private var currentDeviceOrientation: UIDeviceOrientation = .portrait
     // Mirror of the same value, published for the preview to visually
-    // counter-rotate by (see PushUpTestView) — the SwiftUI view itself
-    // doesn't rotate to landscape, so without this the on-screen
+    // counter-rotate by (see ExerciseTrainingView) — the SwiftUI view
+    // itself doesn't rotate to landscape, so without this the on-screen
     // preview looks sideways whenever the phone is physically turned,
     // even though the *detection* is already reading the phone's real
     // orientation correctly via `currentDeviceOrientation` above.
@@ -98,23 +168,23 @@ final class PushUpCounter: NSObject, ObservableObject {
     private var phase: Phase = .up
     private var recentAngles: [Double] = []
 
-    // First-guess thresholds, not exposed as Settings yet — deliberately
-    // wide apart (rather than both near ~130°) so ordinary jitter around
-    // any one angle can't flicker back and forth across a single
-    // threshold and over- or under-count. Tune these once real reps
-    // have been tested against them.
+    // First-guess thresholds, shared across all three exercise kinds
+    // rather than tuned per-kind — not exposed as Settings yet.
+    // Deliberately wide apart (rather than both near ~130°) so ordinary
+    // jitter around any one angle can't flicker back and forth across a
+    // single threshold and over- or under-count.
     private static let downThresholdDegrees = 100.0
     private static let upThresholdDegrees = 155.0
-    // Not private — PushUpTestView's debug panel colors confidence
-    // readouts against this exact same number, rather than duplicating
-    // the value and risking the two drifting apart.
+    // Not private — ExerciseTrainingView's debug panel colors
+    // confidence readouts against this exact same number, rather than
+    // duplicating the value and risking the two drifting apart.
     static let minimumJointConfidence: Float = 0.3
     // Smooths single-frame jitter in the raw angle reading.
     private static let smoothingWindowSize = 3
     // Vision on every single camera frame (~30fps) is more than this
-    // needs — a push-up rep takes at least ~1 second, so sampling at
-    // roughly 10fps still tracks the motion smoothly while using a
-    // third of the CPU.
+    // needs — a rep takes at least ~1 second, so sampling at roughly
+    // 10fps still tracks the motion smoothly while using a third of
+    // the CPU.
     private static let frameProcessingStride = 3
     // Mutated only from `captureOutput` below, which AVFoundation
     // guarantees runs serially on `processingQueue` for a given
@@ -123,7 +193,8 @@ final class PushUpCounter: NSObject, ObservableObject {
     // skipped frames actually skip the CPU-heavy inference too.
     nonisolated(unsafe) private var frameCounter = 0
 
-    override init() {
+    init(kind: ExerciseKind) {
+        self.kind = kind
         super.init()
         previewLayer.videoGravity = .resizeAspectFill
     }
@@ -203,11 +274,9 @@ final class PushUpCounter: NSObject, ObservableObject {
     }
 
     // Forces a known, unmirrored buffer on the data-output connection
-    // regardless of camera position — see the property comment on
-    // `currentDeviceOrientation` above for why this replaced guessing
-    // at per-camera mirrored orientation constants. Must run after the
-    // output (and, for a flip, the new input) is actually attached to
-    // the session, since the connection doesn't exist before that.
+    // regardless of camera position. Must run after the output (and,
+    // for a flip, the new input) is actually attached to the session,
+    // since the connection doesn't exist before that.
     private func configureMirroring() {
         guard let connection = videoOutput.connection(with: .video) else { return }
         connection.automaticallyAdjustsVideoMirroring = false
@@ -282,7 +351,7 @@ final class PushUpCounter: NSObject, ObservableObject {
     // the main actor just to do CPU math. Returns confidences/positions
     // alongside the angle now (not just the angle) so the test screen
     // can show *why* a frame was or wasn't usable.
-    nonisolated private static func poseSample(from observation: VNHumanBodyPoseObservation) -> PoseSample? {
+    nonisolated private static func poseSample(from observation: VNHumanBodyPoseObservation, kind: ExerciseKind) -> PoseSample? {
         func point(_ joint: VNHumanBodyPoseObservation.JointName) -> VNRecognizedPoint? {
             try? observation.recognizedPoint(joint)
         }
@@ -290,48 +359,48 @@ final class PushUpCounter: NSObject, ObservableObject {
             point(joint)?.confidence ?? 0
         }
 
-        let rightConfidence = min(confidence(.rightShoulder), confidence(.rightElbow), confidence(.rightWrist))
-        let leftConfidence = min(confidence(.leftShoulder), confidence(.leftElbow), confidence(.leftWrist))
+        let rightJoints = kind.joints(useRight: true)
+        let leftJoints = kind.joints(useRight: false)
+        let rightConfidence = min(confidence(rightJoints.pointA), confidence(rightJoints.vertex), confidence(rightJoints.pointB))
+        let leftConfidence = min(confidence(leftJoints.pointA), confidence(leftJoints.vertex), confidence(leftJoints.pointB))
         let useRight = rightConfidence >= leftConfidence
         let minConfidence = useRight ? rightConfidence : leftConfidence
-
-        let joints: (shoulder: VNHumanBodyPoseObservation.JointName, elbow: VNHumanBodyPoseObservation.JointName, wrist: VNHumanBodyPoseObservation.JointName) =
-            useRight ? (.rightShoulder, .rightElbow, .rightWrist) : (.leftShoulder, .leftElbow, .leftWrist)
+        let joints = useRight ? rightJoints : leftJoints
 
         // Still nil here means Vision didn't locate this joint at all
         // (as opposed to locating it with low confidence) — genuinely
         // nothing to show or compute from.
-        guard let shoulderPoint = point(joints.shoulder),
-              let elbowPoint = point(joints.elbow),
-              let wristPoint = point(joints.wrist) else { return nil }
-        let shoulder = shoulderPoint.location
-        let elbow = elbowPoint.location
-        let wrist = wristPoint.location
+        guard let pointAPoint = point(joints.pointA),
+              let vertexPoint = point(joints.vertex),
+              let pointBPoint = point(joints.pointB) else { return nil }
+        let pointA = pointAPoint.location
+        let vertex = vertexPoint.location
+        let pointB = pointBPoint.location
 
         let debugInfo = PoseDebugInfo(
             usingRightSide: useRight,
-            shoulder: shoulder,
-            elbow: elbow,
-            wrist: wrist,
-            shoulderConfidence: shoulderPoint.confidence,
-            elbowConfidence: elbowPoint.confidence,
-            wristConfidence: wristPoint.confidence
+            pointA: pointA,
+            vertex: vertex,
+            pointB: pointB,
+            pointAConfidence: pointAPoint.confidence,
+            vertexConfidence: vertexPoint.confidence,
+            pointBConfidence: pointBPoint.confidence
         )
 
         guard minConfidence >= minimumJointConfidence else {
             return PoseSample(angle: nil, debugInfo: debugInfo)
         }
 
-        let toShoulder = CGVector(dx: shoulder.x - elbow.x, dy: shoulder.y - elbow.y)
-        let toWrist = CGVector(dx: wrist.x - elbow.x, dy: wrist.y - elbow.y)
-        let magShoulder = sqrt(toShoulder.dx * toShoulder.dx + toShoulder.dy * toShoulder.dy)
-        let magWrist = sqrt(toWrist.dx * toWrist.dx + toWrist.dy * toWrist.dy)
-        guard magShoulder > 0, magWrist > 0 else {
+        let toA = CGVector(dx: pointA.x - vertex.x, dy: pointA.y - vertex.y)
+        let toB = CGVector(dx: pointB.x - vertex.x, dy: pointB.y - vertex.y)
+        let magA = sqrt(toA.dx * toA.dx + toA.dy * toA.dy)
+        let magB = sqrt(toB.dx * toB.dx + toB.dy * toB.dy)
+        guard magA > 0, magB > 0 else {
             return PoseSample(angle: nil, debugInfo: debugInfo)
         }
 
-        let dot = toShoulder.dx * toWrist.dx + toShoulder.dy * toWrist.dy
-        let cosAngle = max(-1, min(1, dot / (magShoulder * magWrist)))
+        let dot = toA.dx * toB.dx + toA.dy * toB.dy
+        let cosAngle = max(-1, min(1, dot / (magA * magB)))
         let angle = acos(cosAngle) * 180 / .pi
         return PoseSample(angle: angle, debugInfo: debugInfo)
     }
@@ -353,7 +422,7 @@ final class PushUpCounter: NSObject, ObservableObject {
     }
 }
 
-extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension ExerciseCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
     // Runs on `processingQueue`, not the main actor — Vision's pose
     // request is real per-frame CPU work, and only the small resulting
     // published-state update needs to hop back to the main actor
@@ -373,14 +442,13 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
         // reliability (its pose model expects an upright image) rather
         // than the angle math afterward — an unsigned angle from three
         // relative points stays numerically correct under any
-        // consistent rotation of the input, which is why this tracked
-        // passably even before landscape support existed at all.
+        // consistent rotation of the input.
         let orientation = Self.visionOrientation(for: currentDeviceOrientation)
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: orientation, options: [:])
         try? handler.perform([request])
 
         guard let observation = request.results?.first,
-              let sample = Self.poseSample(from: observation) else {
+              let sample = Self.poseSample(from: observation, kind: kind) else {
             Task { @MainActor [weak self] in
                 self?.isBodyVisible = false
                 self?.debugInfo = nil

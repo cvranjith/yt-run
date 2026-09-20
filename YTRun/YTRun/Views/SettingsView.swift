@@ -138,26 +138,52 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Show Push-Ups Option", isOn: $settings.enablePushUpOption)
-                if settings.enablePushUpOption {
-                    Stepper(value: $settings.pushUpsPerSet, in: 1...50) {
+                Toggle("Show Sit-Ups Option", isOn: $settings.enableSitUpOption)
+                Toggle("Show Lunges Option", isOn: $settings.enableLungeOption)
+                if settings.enablePushUpOption || settings.enableSitUpOption || settings.enableLungeOption {
+                    Stepper(value: $settings.repsPerExerciseSet, in: 1...50) {
                         HStack {
-                            Text("Push-ups per set")
+                            Text("Reps per set")
                             Spacer()
-                            Text("\(settings.pushUpsPerSet)")
+                            Text("\(settings.repsPerExerciseSet)")
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Stepper(value: $settings.secondsPerPushUpSet, in: 15...600, step: 15) {
+                    Stepper(value: $settings.secondsPerExerciseSet, in: 15...600, step: 15) {
                         HStack {
                             Text("Reward per set")
                             Spacer()
-                            Text("\(settings.secondsPerPushUpSet)s")
+                            Text("\(settings.secondsPerExerciseSet)s")
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
             } footer: {
-                Text("Adds a \"Do Push-Ups\" option to the Locked screen — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, this is a banked reward like a run: every \(settings.pushUpsPerSet) counted reps earns \(settings.secondsPerPushUpSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run).")
+                Text("Each adds an option to the Locked screen's Exercise picker — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, these are banked rewards like a run: every \(settings.repsPerExerciseSet) counted reps of any of them earns \(settings.secondsPerExerciseSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run). All three share this one reps/reward setting.")
+            }
+
+            Section {
+                Toggle("Show Climb Stairs Option", isOn: $settings.enableStairsOption)
+                if settings.enableStairsOption {
+                    Stepper(value: $settings.floorsPerStairSet, in: 1...20) {
+                        HStack {
+                            Text("Floors per set")
+                            Spacer()
+                            Text("\(settings.floorsPerStairSet)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.secondsPerStairSet, in: 15...600, step: 15) {
+                        HStack {
+                            Text("Reward per set")
+                            Spacer()
+                            Text("\(settings.secondsPerStairSet)s")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Adds a \"Climb Stairs\" option to the Locked screen's Exercise picker — counted via the phone's barometer (the same signal Apple's own Fitness app uses for \"Flights Climbed\"), no camera involved at all. Every \(settings.floorsPerStairSet) floors earns \(settings.secondsPerStairSet) seconds, same claim-explicitly rule as the other exercises.")
             }
 
             Section {

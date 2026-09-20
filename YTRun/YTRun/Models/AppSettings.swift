@@ -39,8 +39,13 @@ final class AppSettings: ObservableObject {
         static let enableWalkOption = "enableWalkOption"
         static let walkAllowsVideo = "walkAllowsVideo"
         static let enablePushUpOption = "enablePushUpOption"
-        static let pushUpsPerSet = "pushUpsPerSet"
-        static let secondsPerPushUpSet = "secondsPerPushUpSet"
+        static let enableSitUpOption = "enableSitUpOption"
+        static let enableLungeOption = "enableLungeOption"
+        static let repsPerExerciseSet = "repsPerExerciseSet"
+        static let secondsPerExerciseSet = "secondsPerExerciseSet"
+        static let enableStairsOption = "enableStairsOption"
+        static let floorsPerStairSet = "floorsPerStairSet"
+        static let secondsPerStairSet = "secondsPerStairSet"
     }
 
     private enum Defaults {
@@ -65,8 +70,10 @@ final class AppSettings: ObservableObject {
         static let listenRatePercent = 50
         static let carRatePercent = 10
         static let chatGPTShortcutName = "YTRun Summarize"
-        static let pushUpsPerSet = 5
-        static let secondsPerPushUpSet = 120
+        static let repsPerExerciseSet = 5
+        static let secondsPerExerciseSet = 120
+        static let floorsPerStairSet = 2
+        static let secondsPerStairSet = 120
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -223,23 +230,52 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(walkAllowsVideo, forKey: Keys.walkAllowsVideo) }
     }
 
-    // Off by default. When off, the Locked screen's "Do Push-Ups"
-    // option (see PushUpTestView/PushUpCounter) doesn't show at all —
-    // same reasoning as `enableWalkOption`.
+    // Each shows/hides its own option on the Locked screen's Exercise
+    // picker — same friction-by-design reasoning as `enableWalkOption`.
+    // All three camera-tracked exercises (see ExerciseCounter/
+    // ExerciseTrainingView) share the one reps/seconds reward economy
+    // below rather than each getting its own — "5 reps of any of these
+    // = 120 seconds" is meant to feel consistent regardless of which
+    // exercise you pick, not a separate dial per exercise.
     @Published var enablePushUpOption: Bool {
         didSet { UserDefaults.standard.set(enablePushUpOption, forKey: Keys.enablePushUpOption) }
     }
 
-    // Every this many counted reps banks `secondsPerPushUpSet` of daily
-    // allowance (or clears an active cooldown, same mutual-exclusivity
-    // rule as a run — see `UsageTracker.completeExerciseReward`), once
-    // explicitly claimed rather than granted automatically.
-    @Published var pushUpsPerSet: Int {
-        didSet { UserDefaults.standard.set(pushUpsPerSet, forKey: Keys.pushUpsPerSet) }
+    @Published var enableSitUpOption: Bool {
+        didSet { UserDefaults.standard.set(enableSitUpOption, forKey: Keys.enableSitUpOption) }
     }
 
-    @Published var secondsPerPushUpSet: Int {
-        didSet { UserDefaults.standard.set(secondsPerPushUpSet, forKey: Keys.secondsPerPushUpSet) }
+    @Published var enableLungeOption: Bool {
+        didSet { UserDefaults.standard.set(enableLungeOption, forKey: Keys.enableLungeOption) }
+    }
+
+    // Every this many counted reps (of whichever camera-tracked
+    // exercise) banks `secondsPerExerciseSet` of daily allowance (or
+    // clears an active cooldown, same mutual-exclusivity rule as a run
+    // — see `UsageTracker.completeExerciseReward`), once explicitly
+    // claimed rather than granted automatically.
+    @Published var repsPerExerciseSet: Int {
+        didSet { UserDefaults.standard.set(repsPerExerciseSet, forKey: Keys.repsPerExerciseSet) }
+    }
+
+    @Published var secondsPerExerciseSet: Int {
+        didSet { UserDefaults.standard.set(secondsPerExerciseSet, forKey: Keys.secondsPerExerciseSet) }
+    }
+
+    // Stairs (see StairClimbCounter) is tracked via the phone's
+    // barometer (CMPedometer's floor count) rather than the camera, so
+    // it gets its own reward pair in a different unit ("floors," not
+    // "reps") instead of sharing the one above.
+    @Published var enableStairsOption: Bool {
+        didSet { UserDefaults.standard.set(enableStairsOption, forKey: Keys.enableStairsOption) }
+    }
+
+    @Published var floorsPerStairSet: Int {
+        didSet { UserDefaults.standard.set(floorsPerStairSet, forKey: Keys.floorsPerStairSet) }
+    }
+
+    @Published var secondsPerStairSet: Int {
+        didSet { UserDefaults.standard.set(secondsPerStairSet, forKey: Keys.secondsPerStairSet) }
     }
 
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
@@ -287,9 +323,16 @@ final class AppSettings: ObservableObject {
         self.enableWalkOption = defaults.bool(forKey: Keys.enableWalkOption)
         self.walkAllowsVideo = defaults.bool(forKey: Keys.walkAllowsVideo)
         self.enablePushUpOption = defaults.bool(forKey: Keys.enablePushUpOption)
-        self.pushUpsPerSet = defaults.object(forKey: Keys.pushUpsPerSet) as? Int
-            ?? Defaults.pushUpsPerSet
-        self.secondsPerPushUpSet = defaults.object(forKey: Keys.secondsPerPushUpSet) as? Int
-            ?? Defaults.secondsPerPushUpSet
+        self.enableSitUpOption = defaults.bool(forKey: Keys.enableSitUpOption)
+        self.enableLungeOption = defaults.bool(forKey: Keys.enableLungeOption)
+        self.repsPerExerciseSet = defaults.object(forKey: Keys.repsPerExerciseSet) as? Int
+            ?? Defaults.repsPerExerciseSet
+        self.secondsPerExerciseSet = defaults.object(forKey: Keys.secondsPerExerciseSet) as? Int
+            ?? Defaults.secondsPerExerciseSet
+        self.enableStairsOption = defaults.bool(forKey: Keys.enableStairsOption)
+        self.floorsPerStairSet = defaults.object(forKey: Keys.floorsPerStairSet) as? Int
+            ?? Defaults.floorsPerStairSet
+        self.secondsPerStairSet = defaults.object(forKey: Keys.secondsPerStairSet) as? Int
+            ?? Defaults.secondsPerStairSet
     }
 }
