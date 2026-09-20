@@ -193,6 +193,17 @@ final class UsageTracker: ObservableObject {
     //   with nothing active), the run extends today's daily allowance.
     @discardableResult
     func completeRun(minutes: Int) -> RunRewardOutcome {
+        completeExerciseReward(seconds: minutes * 60)
+    }
+
+    // Same mutually-exclusive cooldown-vs-daily-allowance rule as
+    // `completeRun`, generalized to whatever exercise is granting the
+    // reward (push-ups, and whatever else gets added later) — expressed
+    // in seconds rather than whole minutes, since a rep-count-based
+    // reward (e.g. 120s per 5 push-ups) doesn't always land on a clean
+    // minute boundary the way a run's reward setting does.
+    @discardableResult
+    func completeExerciseReward(seconds: Int) -> RunRewardOutcome {
         resetIfNewDay()
         refreshCooldownIfExpired()
 
@@ -200,7 +211,7 @@ final class UsageTracker: ObservableObject {
             endCooldown()
             return .clearedCooldown
         } else {
-            grantBonusMinutes(minutes)
+            grantBonusSeconds(seconds)
             return .grantedDailyMinutes
         }
     }
@@ -214,10 +225,11 @@ final class UsageTracker: ObservableObject {
     }
 
     // Extends today's daily allowance without touching the binge/cooldown
-    // throttle. Private — always go through `completeRun` so the
-    // mutual-exclusivity rule above can't be bypassed by accident.
-    private func grantBonusMinutes(_ minutes: Int) {
-        bonusSecondsToday += minutes * 60
+    // throttle. Private — always go through `completeRun`/
+    // `completeExerciseReward` so the mutual-exclusivity rule above
+    // can't be bypassed by accident.
+    private func grantBonusSeconds(_ seconds: Int) {
+        bonusSecondsToday += seconds
         UserDefaults.standard.set(bonusSecondsToday, forKey: Keys.bonusSecondsToday)
     }
 

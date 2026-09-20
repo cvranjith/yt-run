@@ -38,6 +38,9 @@ final class AppSettings: ObservableObject {
         static let chatGPTShortcutName = "chatGPTShortcutName"
         static let enableWalkOption = "enableWalkOption"
         static let walkAllowsVideo = "walkAllowsVideo"
+        static let enablePushUpOption = "enablePushUpOption"
+        static let pushUpsPerSet = "pushUpsPerSet"
+        static let secondsPerPushUpSet = "secondsPerPushUpSet"
     }
 
     private enum Defaults {
@@ -62,6 +65,8 @@ final class AppSettings: ObservableObject {
         static let listenRatePercent = 50
         static let carRatePercent = 10
         static let chatGPTShortcutName = "YTRun Summarize"
+        static let pushUpsPerSet = 5
+        static let secondsPerPushUpSet = 120
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -218,6 +223,25 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(walkAllowsVideo, forKey: Keys.walkAllowsVideo) }
     }
 
+    // Off by default. When off, the Locked screen's "Do Push-Ups"
+    // option (see PushUpTestView/PushUpCounter) doesn't show at all —
+    // same reasoning as `enableWalkOption`.
+    @Published var enablePushUpOption: Bool {
+        didSet { UserDefaults.standard.set(enablePushUpOption, forKey: Keys.enablePushUpOption) }
+    }
+
+    // Every this many counted reps banks `secondsPerPushUpSet` of daily
+    // allowance (or clears an active cooldown, same mutual-exclusivity
+    // rule as a run — see `UsageTracker.completeExerciseReward`), once
+    // explicitly claimed rather than granted automatically.
+    @Published var pushUpsPerSet: Int {
+        didSet { UserDefaults.standard.set(pushUpsPerSet, forKey: Keys.pushUpsPerSet) }
+    }
+
+    @Published var secondsPerPushUpSet: Int {
+        didSet { UserDefaults.standard.set(secondsPerPushUpSet, forKey: Keys.secondsPerPushUpSet) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -262,5 +286,10 @@ final class AppSettings: ObservableObject {
         self.chatGPTShortcutName = defaults.string(forKey: Keys.chatGPTShortcutName) ?? Defaults.chatGPTShortcutName
         self.enableWalkOption = defaults.bool(forKey: Keys.enableWalkOption)
         self.walkAllowsVideo = defaults.bool(forKey: Keys.walkAllowsVideo)
+        self.enablePushUpOption = defaults.bool(forKey: Keys.enablePushUpOption)
+        self.pushUpsPerSet = defaults.object(forKey: Keys.pushUpsPerSet) as? Int
+            ?? Defaults.pushUpsPerSet
+        self.secondsPerPushUpSet = defaults.object(forKey: Keys.secondsPerPushUpSet) as? Int
+            ?? Defaults.secondsPerPushUpSet
     }
 }

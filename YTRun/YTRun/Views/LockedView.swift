@@ -67,6 +67,18 @@ struct LockedView: View {
                 .buttonStyle(.bordered)
             }
 
+            // Hidden unless explicitly turned on in Settings, same
+            // reasoning as Walk above — unlike Walk, this is a banked
+            // reward like a run (see UsageTracker.completeExerciseReward),
+            // just counted via on-device camera pose tracking instead of
+            // GPS distance/duration.
+            if settings.enablePushUpOption {
+                NavigationLink("Do Push-Ups") {
+                    PushUpTestView()
+                }
+                .buttonStyle(.bordered)
+            }
+
             // Hidden unless explicitly turned on in Settings — this
             // bypasses the actual run (no GPS/distance/duration check at
             // all), which defeats the entire point of the app if it's

@@ -6,14 +6,25 @@
 import SwiftUI
 import AVFoundation
 
-// Standalone test harness for PushUpCounter — deliberately not wired
-// into the Locked screen yet. The algorithm (Vision body-pose angle
-// tracking) needs validating against real reps first; this exists to
-// answer "does it count reliably" before it's trusted to gate
-// anything, the same way Walk mode's step-count approach was simple
-// enough not to need this step first.
+// Counts push-up reps on-device via Vision body-pose tracking and, in
+// sets of `settings.pushUpsPerSet`, lets you claim `secondsPerPushUpSet`
+// of viewing/listening time — a banked reward like a run (see
+// UsageTracker.completeExerciseReward), just counted via the camera
+// instead of GPS distance/duration. Reachable both from Home (anytime)
+// and, when "Show Push-Ups Option" is on in Settings, from the Locked
+// screen as an actual way to earn back time.
 struct PushUpTestView: View {
+    @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var usageTracker: UsageTracker
     @StateObject private var counter = PushUpCounter()
+
+    // Reps already "spent" on a claimed reward — subtracted from
+    // `counter.repCount` so a claimed set can't be claimed again, and
+    // reset alongside it (see `resetAll`) so a manual Reset can't leave
+    // this stranded ahead of a freshly-zeroed rep count.
+    @State private var claimedRepCount = 0
+    @State private var rewardMessage: String?
+    @State private var isShowingDebugInfo = false
 
     var body: some View {
         ZStack {
@@ -45,7 +56,7 @@ struct PushUpTestView: View {
             }
 
             VStack {
-                if let debug = counter.debugInfo {
+                if isShowingDebugInfo, let debug = counter.debugInfo {
                     debugPanel(debug)
                         .padding(.top, 8)
                 }
@@ -62,18 +73,21 @@ struct PushUpTestView: View {
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.8))
                     }
-                    Text("Orientation: \(orientationLabel)")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.6))
+
+                    rewardProgressView
+
                     HStack(spacing: 16) {
-                        Button("Reset") { counter.reset() }
+                        Button("Reset") { resetAll() }
                             .buttonStyle(.bordered)
                         Button("Flip Camera") { counter.flipCamera() }
                             .buttonStyle(.bordered)
-                        Button("Fix Orientation") { counter.cycleManualOrientation() }
-                            .buttonStyle(.bordered)
+                        Button(isShowingDebugInfo ? "Hide Debug Info" : "Show Debug Info") {
+                            isShowingDebugInfo.toggle()
+                        }
+                        .buttonStyle(.bordered)
                     }
                     .tint(.white)
+                    .font(.caption)
                 }
                 .padding()
                 .background(.black.opacity(0.55))
@@ -95,18 +109,74 @@ struct PushUpTestView: View {
                 .padding()
             }
         }
-        .navigationTitle("Push-Up Test")
+        .navigationTitle("Push-Ups")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
         .toolbarBackground(.visible, for: .navigationBar)
         .onAppear { counter.requestAccessAndStart() }
         .onDisappear { counter.stop() }
+        .alert("Push-Ups", isPresented: Binding(
+            get: { rewardMessage != nil },
+            set: { if !$0 { rewardMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(rewardMessage ?? "")
+        }
     }
 
-    // Debug panel for the "why didn't that count" question — shows
-    // exactly what Vision saw on the last processed frame: which side
-    // it's tracking, the current rep-counting phase, and each of the
-    // three joints' confidence (red below the threshold PushUpCounter
+    // MARK: - Reward
+
+    private var unclaimedReps: Int { max(0, counter.repCount - claimedRepCount) }
+    private var pushUpsPerSet: Int { max(1, settings.pushUpsPerSet) }
+    private var setsReadyToClaim: Int { unclaimedReps / pushUpsPerSet }
+    private var repsIntoCurrentSet: Int { unclaimedReps % pushUpsPerSet }
+
+    @ViewBuilder
+    private var rewardProgressView: some View {
+        if setsReadyToClaim > 0 {
+            Text("🎉 Ready to claim: +\(setsReadyToClaim * settings.secondsPerPushUpSet)s")
+                .font(.headline)
+                .foregroundStyle(.green)
+            Button("Claim Reward") { claimReward() }
+                .buttonStyle(.borderedProminent)
+        } else {
+            Text("\(repsIntoCurrentSet)/\(pushUpsPerSet) push-ups for +\(settings.secondsPerPushUpSet)s")
+                .font(.subheadline)
+                .foregroundStyle(.white.opacity(0.85))
+            ProgressView(value: Double(repsIntoCurrentSet), total: Double(pushUpsPerSet))
+                .frame(width: 160)
+                .tint(.green)
+        }
+    }
+
+    private func claimReward() {
+        let sets = setsReadyToClaim
+        guard sets > 0 else { return }
+        let seconds = sets * settings.secondsPerPushUpSet
+        claimedRepCount += sets * pushUpsPerSet
+        switch usageTracker.completeExerciseReward(seconds: seconds) {
+        case .grantedDailyMinutes:
+            rewardMessage = "+\(seconds) seconds added to today's allowance!"
+        case .clearedCooldown:
+            rewardMessage = "Cooldown cleared — no extra time needed right now."
+        }
+    }
+
+    // Resets reward progress alongside the rep count — without this, a
+    // manual Reset would zero `counter.repCount` while `claimedRepCount`
+    // stayed behind, making `unclaimedReps` go negative.
+    private func resetAll() {
+        counter.reset()
+        claimedRepCount = 0
+    }
+
+    // MARK: - Debug panel
+
+    // For the "why didn't that count" question — shows exactly what
+    // Vision saw on the last processed frame: which side it's
+    // tracking, the current rep-counting phase, and each of the three
+    // joints' confidence (red below the threshold PushUpCounter
     // actually uses to decide whether to trust the frame at all), plus
     // a shape diagram. The diagram is plotted in Vision's own raw
     // coordinate space, not mapped onto the camera preview — see
@@ -172,11 +242,9 @@ struct PushUpTestView: View {
         counter.deviceOrientation == .landscapeLeft || counter.deviceOrientation == .landscapeRight
     }
 
-    // If this ends up rotating the wrong way in practice, the fix is
-    // just flipping the sign on the two landscape cases — this is a
-    // best-guess pairing with PushUpCounter's own rotation table, not
-    // independently verified on-device. "Fix Orientation" below exists
-    // precisely because that table needed correcting once already.
+    // Best-guess pairing with PushUpCounter's own rotation table, not
+    // independently verified on-device — front+portrait (the validated
+    // setup) is unaffected by this either way.
     private var previewRotationDegrees: Double {
         switch counter.deviceOrientation {
         case .portrait: return 0
@@ -186,21 +254,12 @@ struct PushUpTestView: View {
         default: return 0
         }
     }
-
-    private var orientationLabel: String {
-        guard let override = counter.manualOrientationOverride else { return "Auto" }
-        switch override {
-        case .up: return "Manual: Up"
-        case .down: return "Manual: Down"
-        case .left: return "Manual: Left"
-        case .right: return "Manual: Right"
-        default: return "Manual"
-        }
-    }
 }
 
 #Preview {
     NavigationStack {
         PushUpTestView()
     }
+    .environmentObject(AppSettings())
+    .environmentObject(UsageTracker())
 }

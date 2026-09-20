@@ -133,7 +133,31 @@ struct SettingsView: View {
                     Toggle("Allow Video While Walking", isOn: $settings.walkAllowsVideo)
                 }
             } footer: {
-                Text("Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, checked every ~30 seconds against your actual step count, pausing (with a \"Not moving\" notice) if you stop and resuming once you start again. Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
+                Text("Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, live against your actual step count (a real step resumes it right away; about 8 seconds with none pauses it, with a \"Not moving\" notice, until you start again). Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
+            }
+
+            Section {
+                Toggle("Show Push-Ups Option", isOn: $settings.enablePushUpOption)
+                if settings.enablePushUpOption {
+                    Stepper(value: $settings.pushUpsPerSet, in: 1...50) {
+                        HStack {
+                            Text("Push-ups per set")
+                            Spacer()
+                            Text("\(settings.pushUpsPerSet)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.secondsPerPushUpSet, in: 15...600, step: 15) {
+                        HStack {
+                            Text("Reward per set")
+                            Spacer()
+                            Text("\(settings.secondsPerPushUpSet)s")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text("Adds a \"Do Push-Ups\" option to the Locked screen — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, this is a banked reward like a run: every \(settings.pushUpsPerSet) counted reps earns \(settings.secondsPerPushUpSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run).")
             }
 
             Section {
