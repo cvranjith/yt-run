@@ -17,6 +17,16 @@ import Vision
 // Vision is more confident about each frame is used — a single-camera
 // side-profile view of a push-up naturally only shows one arm clearly
 // anyway.
+//
+// Defaults to the front camera in portrait — confirmed by hand to
+// track reliably, and it matches how the phone would actually be
+// propped in practice (facing you, roughly at floor/chest height).
+// A pure side-profile view (landscape, phone to the side) should be
+// *more* geometrically precise in principle — the elbow's bend then
+// happens mostly within the camera's 2D plane rather than partly
+// toward/away from the lens, which 2D-only tracking can't see — but
+// isn't the more practical setup, and testing showed front-on tracks
+// well enough anyway.
 @MainActor
 final class PushUpCounter: NSObject, ObservableObject {
     @Published private(set) var repCount = 0
@@ -32,8 +42,18 @@ final class PushUpCounter: NSObject, ObservableObject {
     // entirely (see the `nonisolated` delegate method below) so it
     // never competes with the UI/preview rendering.
     private let processingQueue = DispatchQueue(label: "com.ranjith.ytrun.pushupcounter.processing")
-    private var currentCameraPosition: AVCaptureDevice.Position = .back
+    private var currentCameraPosition: AVCaptureDevice.Position = .front
     private var isConfigured = false
+    // Mirrors `currentCameraPosition` for the nonisolated capture
+    // callback to read — written and read only from `processingQueue`
+    // (set inside `flipCamera`'s queued block, right alongside the
+    // actual camera swap), so there's no real race despite the
+    // annotation just being about crossing the main-actor boundary.
+    // The front and back cameras are mounted rotated the same way but
+    // facing opposite directions, so in portrait the front camera's
+    // raw buffer needs the *mirrored* orientation variant to be
+    // interpreted correctly, unlike the back camera's plain `.right`.
+    nonisolated(unsafe) private var visionOrientation: CGImagePropertyOrientation = .leftMirrored
 
     private enum Phase {
         case up, down
@@ -102,9 +122,11 @@ final class PushUpCounter: NSObject, ObservableObject {
     }
 
     func flipCamera() {
-        currentCameraPosition = currentCameraPosition == .back ? .front : .back
+        let newPosition: AVCaptureDevice.Position = currentCameraPosition == .back ? .front : .back
+        currentCameraPosition = newPosition
         processingQueue.async { [weak self] in
             guard let self else { return }
+            self.visionOrientation = newPosition == .back ? .right : .leftMirrored
             self.session.beginConfiguration()
             for input in self.session.inputs { self.session.removeInput(input) }
             self.addCameraInput()
@@ -210,12 +232,14 @@ extension PushUpCounter: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let request = VNDetectHumanBodyPoseRequest()
-        // Orientation only affects how the *visual* skeleton would be
-        // laid out, not the angle math itself (relative-vector angles
-        // are invariant to a consistent rotation) — `.right` matches
-        // the back camera in portrait, which is this view's fixed
-        // orientation.
-        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .right, options: [:])
+        // Getting this right mostly matters for Vision's own detection
+        // reliability (its pose model expects an upright image) rather
+        // than the angle math afterward — an unsigned angle from three
+        // relative points stays numerically correct under any
+        // consistent rotation/mirroring of the input, which is why an
+        // earlier version of this worked passably even with a
+        // fixed-wrong orientation for the front camera.
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: visionOrientation, options: [:])
         try? handler.perform([request])
 
         guard let observation = request.results?.first,
