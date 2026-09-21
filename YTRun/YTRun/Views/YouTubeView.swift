@@ -77,6 +77,19 @@ struct YouTubeView: View {
     @State private var captionsAvailabilityCacheVideoID: String?
     @State private var captionsAvailabilityCacheValue: Bool?
 
+    // Current video's category badge (see `ChannelCategoryResolver`) —
+    // single-slot like the captions-availability cache above, replaced
+    // (not accumulated) on every channel change. `nil` while unresolved
+    // keeps the badge genuinely subtle (nothing shown, not a spinner).
+    @State private var currentVideoCategory: String?
+    @State private var categoryLookupChannelName: String?
+    // Set only when a classification was freshly made (not a cache hit)
+    // — the moment worth a "Categorized as…" toast, since a cache hit
+    // should stay completely silent.
+    @State private var freshCategoryToast: String?
+    @State private var isShowingNewCategoryAlert = false
+    @State private var newCategoryText = ""
+
     // Walk mode bypasses the normal allowance wall entirely while
     // active — it's a live gate (see WalkModeManager), not a top-up to
     // this check. Whether playback is actually *allowed* moment-to-
@@ -128,6 +141,11 @@ struct YouTubeView: View {
                         }
                         statusBar
                         controlBar
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if let freshCategoryToast {
+                        categoryToast(freshCategoryToast)
                     }
                 }
                 // A repeating timer, not tied to WKWebView at all — every
@@ -287,6 +305,18 @@ struct YouTubeView: View {
         }
         .onChange(of: webViewStore.currentURL) { _, newURL in
             updateCaptionsAvailability(for: newURL)
+        }
+        .onChange(of: webViewStore.currentChannelName) { _, newChannelName in
+            updateVideoCategory(for: newChannelName)
+        }
+        .alert("New Category", isPresented: $isShowingNewCategoryAlert) {
+            TextField("Category name", text: $newCategoryText)
+            Button("Cancel", role: .cancel) { newCategoryText = "" }
+            Button("Save") {
+                let trimmed = newCategoryText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { assignCategory(trimmed) }
+                newCategoryText = ""
+            }
         }
         .onDisappear {
             // Covers fully leaving this screen (e.g. tapping back to Home).
@@ -475,6 +505,12 @@ struct YouTubeView: View {
             Text("Remaining: ").foregroundStyle(.secondary)
                 + Text("Daily \(dailyMinutes)m").foregroundStyle(dailyCritical ? .red : .primary)
                 + Text(", Binge \(bingeMinutes)m").foregroundStyle(bingeCritical ? .red : .primary)
+
+            Spacer(minLength: 8)
+
+            if let currentVideoCategory {
+                categoryBadge(currentVideoCategory)
+            }
         }
         .font(.caption)
         .fontWeight(.semibold)
@@ -483,6 +519,31 @@ struct YouTubeView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    // A subtle, tappable topic chip — nothing shown at all while the
+    // category is still unresolved (see `updateVideoCategory`), so this
+    // never introduces a loading flicker on every video. Tapping it
+    // reassigns the *channel's* category (see `ChannelCategoryResolver`),
+    // not just this one video's.
+    private func categoryBadge(_ category: String) -> some View {
+        // Fetched fresh each time the menu opens rather than cached in
+        // state — it's just a distinct-values read over `ChannelCategory`,
+        // cheap enough not to need caching, and always current.
+        Menu {
+            ForEach(ChannelCategoryResolver.knownCategories(modelContext: modelContext), id: \.self) { option in
+                Button(option) { assignCategory(option) }
+            }
+            Button("New Category…") { isShowingNewCategoryAlert = true }
+        } label: {
+            Text(category)
+                .font(.caption2)
+                .fontWeight(.medium)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.blue.opacity(0.15), in: Capsule())
+                .foregroundStyle(.blue)
+        }
     }
 
     // Only shown while a download is actually in flight. A linear
@@ -694,6 +755,85 @@ struct YouTubeView: View {
                 captionsAvailable = available
             }
         }
+    }
+
+    private func updateVideoCategory(for channelName: String?) {
+        guard let channelName, !channelName.isEmpty else {
+            currentVideoCategory = nil
+            categoryLookupChannelName = nil
+            return
+        }
+        guard channelName != categoryLookupChannelName else { return }
+        categoryLookupChannelName = channelName
+
+        if let cached = ChannelCategoryResolver.cachedCategory(channelName: channelName, modelContext: modelContext) {
+            currentVideoCategory = cached
+            return
+        }
+        currentVideoCategory = nil
+        let videoURLString = webViewStore.currentURL?.absoluteString
+        Task {
+            // Only worth the network round trip when actually classifying
+            // (a cache hit inside `resolve` never touches this) — best-
+            // effort, `nil` on any failure just means the classifier
+            // works from the channel name alone.
+            var videoTitle: String?
+            if let videoURLString {
+                videoTitle = await YouTubeOEmbed.fetchTitle(for: videoURLString)
+            }
+            guard let result = await ChannelCategoryResolver.resolve(
+                channelName: channelName,
+                videoTitle: videoTitle,
+                modelContext: modelContext,
+                aiGatewayClient: aiGatewayClient,
+                settings: settings
+            ) else { return }
+            // Only apply if still on the same channel — a quick nav away
+            // and back shouldn't let a slower, now-stale classification
+            // clobber whatever the more recent one already decided.
+            guard categoryLookupChannelName == channelName else { return }
+            currentVideoCategory = result.category
+            if result.isFresh {
+                freshCategoryToast = "Categorized \(channelName) as \(result.category)"
+                Task {
+                    try? await Task.sleep(for: .seconds(6))
+                    if freshCategoryToast?.hasPrefix("Categorized \(channelName)") == true {
+                        freshCategoryToast = nil
+                    }
+                }
+            }
+        }
+    }
+
+    // Only ever shown once per freshly-classified channel (see
+    // `updateVideoCategory`) — auto-dismisses on its own, and tapping it
+    // opens the same reassignment menu as the persistent badge, so
+    // catching it isn't the only chance to correct a guess.
+    private func categoryToast(_ message: String) -> some View {
+        Menu {
+            ForEach(ChannelCategoryResolver.knownCategories(modelContext: modelContext), id: \.self) { option in
+                Button(option) { assignCategory(option) }
+            }
+            Button("New Category…") { isShowingNewCategoryAlert = true }
+        } label: {
+            HStack(spacing: 6) {
+                Text(message)
+                Text("· tap to change")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+        }
+        .padding(.top, 8)
+    }
+
+    private func assignCategory(_ category: String) {
+        guard let channelName = categoryLookupChannelName else { return }
+        ChannelCategoryResolver.setCategory(category, forChannel: channelName, modelContext: modelContext)
+        currentVideoCategory = category
+        freshCategoryToast = nil
     }
 
     // Accepts either a bare video ID ("dQw4w9WgXcQ") or a full URL in any

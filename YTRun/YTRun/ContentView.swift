@@ -78,6 +78,10 @@ struct ContentView: View {
                     }
                     statsCard
 
+                    if settings.enableEnergyLedger {
+                        balanceSheetCard
+                    }
+
                     LazyVGrid(columns: gridColumns, spacing: 16) {
                         MenuTile(title: "Watch YouTube", systemImage: "play.rectangle.fill", color: .red) {
                             YouTubeView()
@@ -235,7 +239,62 @@ struct ContentView: View {
         // looking frozen until the next video plays.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
+            // `refresh` self-throttles to every ~8s internally, so piggy-
+            // backing on this existing 1-second tick (rather than adding
+            // a second timer) costs nothing extra in practice.
+            energyLedgerManager.refresh(modelContext: modelContext, settings: settings)
         }
+    }
+
+    // A rolling honesty balance (see `EnergyLedgerManager`) surfaced here
+    // as three numbers — today's earn/spend, plus the running balance —
+    // with the first two drilling into a breakdown. Deliberately a
+    // separate card from `statsCard` above rather than folded into it:
+    // that one reflects the hard daily/binge gates, this one is the
+    // parallel, non-blocking ledger, and conflating them would make the
+    // "this doesn't replace your hard limits" distinction less obvious.
+    private var balanceSheetCard: some View {
+        HStack(spacing: 0) {
+            NavigationLink {
+                CreditBreakdownView()
+            } label: {
+                balanceSheetColumn(title: "Earned today", seconds: energyLedgerManager.todayEarnedSeconds, tint: .primary)
+            }
+            .buttonStyle(.plain)
+
+            Divider().frame(height: 44)
+
+            NavigationLink {
+                UsageBreakdownView()
+            } label: {
+                balanceSheetColumn(title: "Spent today", seconds: energyLedgerManager.todaySpentSeconds, tint: .primary)
+            }
+            .buttonStyle(.plain)
+
+            Divider().frame(height: 44)
+
+            balanceSheetColumn(
+                title: energyLedgerManager.balanceSeconds < 0 ? "You owe" : "Balance",
+                seconds: abs(energyLedgerManager.balanceSeconds),
+                tint: energyLedgerManager.balanceSeconds < 0 ? .red : .green
+            )
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.vertical, 18)
+        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+    }
+
+    private func balanceSheetColumn(title: String, seconds: Int, tint: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("\(seconds / 60) min")
+                .font(.headline)
+                .foregroundStyle(tint)
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -243,5 +302,5 @@ struct ContentView: View {
 // the full app on a simulator/device — handy while iterating on layout.
 #Preview {
     ContentView()
-        .modelContainer(for: [RunRecord.self, WatchSegment.self], inMemory: true)
+        .modelContainer(for: [RunRecord.self, WatchSegment.self, LedgerEvent.self, ChannelCategory.self], inMemory: true)
 }

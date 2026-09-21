@@ -401,6 +401,59 @@ final class AIGatewayClient: ObservableObject {
         return .success(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    // One-word video-category classification, for the per-channel
+    // category cache (see `ChannelCategoryResolver`). Reuses the same
+    // three direct-provider adapters `summarizeViaDirectProvider` calls —
+    // they're already just "send instructions + arbitrary text, get text
+    // back," nothing summarization-specific about them. Deliberately
+    // never routed through `ytRunGateway` (that's a server-side Codex
+    // service with no generic classify endpoint) or a new YouTube Data
+    // API key (unused anywhere else in this app) — just whichever
+    // already-configured direct provider is available, preferring the
+    // one Summarize itself defaults to. Returns nil (not "Other") when no
+    // provider is configured at all, so a guess is never cached that was
+    // never actually made — it's retried once a key exists.
+    func classifyChannelCategory(channelName: String, videoTitle: String?, knownCategories: [String], settings: AppSettings) async -> String? {
+        guard let provider = Self.availableDirectProvider(settings: settings) else { return nil }
+
+        let instructions = "You are tagging YouTube videos with a single short topic category, "
+            + "for a personal watch-history report. Known categories so far: \(knownCategories.joined(separator: ", ")). "
+            + "Reply with just the category name — reuse one of the known ones if it fits, invent a short new one (1-2 words) "
+            + "if none fit well, or reply \"Other\" if you genuinely can't tell. No punctuation, no explanation."
+        let content = "Channel: \(channelName)\nTitle: \(videoTitle ?? "(unknown)")"
+
+        let result: Result<String, AIGatewayError>
+        switch provider {
+        case .openAICompatible:
+            result = await callOpenAICompatible(instructions: instructions, transcript: content, settings: settings)
+        case .gemini:
+            result = await callGemini(instructions: instructions, transcript: content, settings: settings)
+        case .claude:
+            result = await callClaude(instructions: instructions, transcript: content, settings: settings)
+        case .ytRunGateway:
+            return nil
+        }
+
+        guard case .success(let raw) = result else { return nil }
+        let category = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return category.isEmpty ? nil : category
+    }
+
+    private static func availableDirectProvider(settings: AppSettings) -> AISummaryProvider? {
+        func hasKey(_ provider: AISummaryProvider) -> Bool {
+            switch provider {
+            case .openAICompatible: return !settings.openAICompatibleAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .gemini: return !settings.geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .claude: return !settings.claudeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .ytRunGateway: return false
+            }
+        }
+        if settings.defaultSummaryProvider != .ytRunGateway, hasKey(settings.defaultSummaryProvider) {
+            return settings.defaultSummaryProvider
+        }
+        return [AISummaryProvider.claude, .gemini, .openAICompatible].first(where: hasKey)
+    }
+
     // Resolves a direct, ready-to-download URL via the youtube_download
     // service (see ai-gateway's services/youtube_download.py) — no
     // video bytes pass through the gateway/router or this method; the

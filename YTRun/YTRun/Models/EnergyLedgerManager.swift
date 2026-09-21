@@ -24,6 +24,13 @@ import SwiftData
 @MainActor
 final class EnergyLedgerManager: ObservableObject {
     @Published private(set) var balanceSeconds: Int = 0
+    // Today's slice of the same computation `refresh` already does for
+    // the whole window — captured for free from that same loop rather
+    // than a second pass, for the Home screen's balance-sheet card.
+    @Published private(set) var todayEarnedSeconds: Int = 0
+    @Published private(set) var todaySpentSeconds: Int = 0
+    @Published private(set) var todayStepCount: Int = 0
+    @Published private(set) var todayCreditEvents: [(note: String, seconds: Int)] = []
 
     private let pedometer = CMPedometer()
     private var lastRefreshAt: Date?
@@ -67,6 +74,9 @@ final class EnergyLedgerManager: ObservableObject {
             cursor = next
         }
 
+        let todayEvents = ledgerEvents.filter { calendar.isDate($0.date, inSameDayAs: today) }
+            .map { (note: $0.note, seconds: $0.seconds) }
+
         queryDailySteps(dayStarts: dayStarts, calendar: calendar) { [weak self] stepsByDay in
             guard let self else { return }
             var total = 0
@@ -76,7 +86,20 @@ final class EnergyLedgerManager: ObservableObject {
                 let steps = stepsByDay[day] ?? 0
                 let stepSeconds = Int((Double(steps) / Double(stepsPerCreditSet)) * Double(secondsPerStepCredit))
                 total += stepSeconds + events - watched
+                if day == today {
+                    // Matches the same `stepSeconds + events - watched`
+                    // shape as the balance total above, just for today
+                    // alone — so "Earned − Spent" on the Home card always
+                    // agrees with the rolling balance's today-contribution.
+                    // `events` can include a negative Walk-mode deduction;
+                    // that shows up as its own line item on the credit
+                    // breakdown screen rather than being hidden here.
+                    self.todayEarnedSeconds = stepSeconds + events
+                    self.todaySpentSeconds = watched
+                    self.todayStepCount = steps
+                }
             }
+            self.todayCreditEvents = todayEvents
             self.balanceSeconds = total
         }
     }

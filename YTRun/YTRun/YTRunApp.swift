@@ -18,6 +18,6 @@ struct YTRunApp: App {
         // hierarchy — any view below this can read/write via `@Query` and
         // `@Environment(\.modelContext)` without being handed anything
         // explicitly.
-        .modelContainer(for: [RunRecord.self, WatchSegment.self, LedgerEvent.self])
+        .modelContainer(for: [RunRecord.self, WatchSegment.self, LedgerEvent.self, ChannelCategory.self])
     }
 }
