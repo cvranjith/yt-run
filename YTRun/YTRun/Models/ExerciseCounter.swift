@@ -36,6 +36,17 @@ enum ExerciseKind: String, CaseIterable, Identifiable {
         }
     }
 
+    // Tags a claimed reward's `LedgerEvent` (see `ExerciseTrainingView
+    // .claimReward()`) so breakdown screens can group by exercise
+    // rather than lumping every reward source into one bucket.
+    var ledgerSource: LedgerEventSource {
+        switch self {
+        case .pushUps: return .pushUps
+        case .sitUps: return .sitUps
+        case .lunges: return .lunges
+        }
+    }
+
     // Labels for the debug panel — matching whichever three joints
     // this exercise actually tracks.
     var pointALabel: String {

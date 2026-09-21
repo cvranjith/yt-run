@@ -556,7 +556,7 @@ struct YouTubeView: View {
                 // also inflate the passive daily step credit below.
                 if steps > 0 {
                     let seconds = Int((Double(steps) / Double(max(1, settings.stepsPerCreditSet))) * Double(settings.secondsPerStepCredit))
-                    modelContext.insert(LedgerEvent(date: .now, seconds: -seconds, note: "Walk mode (\(steps) steps, already used live)"))
+                    modelContext.insert(LedgerEvent(date: .now, seconds: -seconds, note: "Walk mode (\(steps) steps, already used live)", source: .walk))
                 }
             }
             .font(.caption)

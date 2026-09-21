@@ -55,6 +55,14 @@ struct SettingsView: View {
             }
 
             Section {
+                NavigationLink("Habits") {
+                    HabitSettingsView()
+                }
+            } header: {
+                sectionHeader("Habits", info: "Define the predefined \"Automatic\" habit (Late-Night Penalty) and any habits of your own — logging them day to day happens from the Habits tile on the dashboard, not here.")
+            }
+
+            Section {
                 Toggle("Restrict Shorts", isOn: $settings.restrictShorts)
             } header: {
                 sectionHeader("Shorts", info: "When on, Shorts thumbnails and shelves are hidden everywhere in the YouTube screen (home feed, search, the Shorts tab) so they can't even be previewed, and opening a Shorts link directly redirects back to the home feed. Best-effort — YouTube's markup can change, and the Shorts feed can scroll between clips without a page reload, so there may be a brief flash before a direct link redirects.")

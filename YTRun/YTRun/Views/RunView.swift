@@ -158,7 +158,7 @@ struct RunView: View {
             outcome = usageTracker.completeExerciseReward(seconds: rewardSeconds)
         } else {
             outcome = nil
-            let event = LedgerEvent(date: finishedAt, seconds: rewardSeconds, note: "\(distanceText) run")
+            let event = LedgerEvent(date: finishedAt, seconds: rewardSeconds, note: "\(distanceText) run", source: .run)
             modelContext.insert(event)
             ledgerEvent = event
         }

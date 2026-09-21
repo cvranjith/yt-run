@@ -8,9 +8,10 @@ import SwiftUI
 // Today's Energy Ledger earn side, broken into line items — the steps
 // credit (computed the same way `EnergyLedgerManager` does, from its
 // already-fetched `todayStepCount`) plus each individual `LedgerEvent`
-// recorded today (push-ups/sit-ups/lunges/stairs/runs, and any Walk-
-// mode deduction) — rather than just the one summed number the Home
-// card shows.
+// recorded today, grouped by its `source` (Push-Ups, Sit-Ups, Lunges,
+// Stairs, Run, Habits, Walk) rather than lumped into one bucket — so
+// logging a habit several times, say, doesn't read as if it were
+// exercise activity.
 struct CreditBreakdownView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var energyLedgerManager: EnergyLedgerManager
@@ -18,6 +19,19 @@ struct CreditBreakdownView: View {
     private var stepCreditSeconds: Int {
         guard settings.stepsPerCreditSet > 0 else { return 0 }
         return Int((Double(energyLedgerManager.todayStepCount) / Double(settings.stepsPerCreditSet)) * Double(settings.secondsPerStepCredit))
+    }
+
+    // Fixed order rather than alphabetical/insertion order, so the list
+    // reads the same way every day regardless of what happened to be
+    // logged first.
+    private static let sourceOrder: [LedgerEventSource] = [.pushUps, .sitUps, .lunges, .stairs, .run, .habit, .walk, .other]
+
+    private var eventsBySource: [(source: LedgerEventSource, events: [(note: String, seconds: Int, source: LedgerEventSource)])] {
+        let grouped = Dictionary(grouping: energyLedgerManager.todayCreditEvents, by: \.source)
+        return Self.sourceOrder.compactMap { source in
+            guard let events = grouped[source], !events.isEmpty else { return nil }
+            return (source: source, events: events)
+        }
     }
 
     var body: some View {
@@ -28,13 +42,13 @@ struct CreditBreakdownView: View {
                 Text("Steps")
             }
 
-            if !energyLedgerManager.todayCreditEvents.isEmpty {
+            ForEach(eventsBySource, id: \.source) { group in
                 Section {
-                    ForEach(Array(energyLedgerManager.todayCreditEvents.enumerated()), id: \.offset) { _, event in
+                    ForEach(Array(group.events.enumerated()), id: \.offset) { _, event in
                         row(note: event.note, seconds: event.seconds)
                     }
                 } header: {
-                    Text("Exercise & Runs")
+                    Text(group.source.displayName)
                 }
             }
 

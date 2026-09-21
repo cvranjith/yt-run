@@ -189,7 +189,7 @@ struct ExerciseTrainingView: View {
                 rewardMessage = "Cooldown cleared — no extra time needed right now."
             }
         } else {
-            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * repsPerSet) \(kind.displayName.lowercased())"))
+            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * repsPerSet) \(kind.displayName.lowercased())", source: kind.ledgerSource))
             rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."
         }
     }

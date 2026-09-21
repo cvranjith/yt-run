@@ -47,7 +47,7 @@ final class EnergyLedgerManager: ObservableObject {
     @Published private(set) var todayEarnedSeconds: Int = 0
     @Published private(set) var todaySpentSeconds: Int = 0
     @Published private(set) var todayStepCount: Int = 0
-    @Published private(set) var todayCreditEvents: [(note: String, seconds: Int)] = []
+    @Published private(set) var todayCreditEvents: [(note: String, seconds: Int, source: LedgerEventSource)] = []
     @Published private(set) var todayLateNightPenaltySeconds: Int = 0
     // The whole window's per-day nets, not just their sum — for the Home
     // screen's 7-day trend chart. A red day's contribution simply stops
@@ -135,7 +135,7 @@ final class EnergyLedgerManager: ObservableObject {
         }
 
         let todayEvents = ledgerEvents.filter { calendar.isDate($0.date, inSameDayAs: today) }
-            .map { (note: $0.note, seconds: $0.seconds) }
+            .map { (note: $0.note, seconds: $0.seconds, source: $0.sourceKind) }
 
         queryDailySteps(dayStarts: dayStarts, calendar: calendar) { [weak self] stepsByDay in
             guard let self else { return }

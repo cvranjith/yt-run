@@ -96,7 +96,7 @@ struct StairClimbView: View {
                 rewardMessage = "Cooldown cleared — no extra time needed right now."
             }
         } else {
-            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * floorsPerSet) floors climbed"))
+            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * floorsPerSet) floors climbed", source: .stairs))
             rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."
         }
     }
