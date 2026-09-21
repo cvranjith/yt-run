@@ -33,11 +33,15 @@ struct RunView: View {
         let durationSeconds: Int
         let route: [CLLocationCoordinate2D]
         let estimatedCalories: Double
-        let qualified: Bool
-        // What the reward actually did — nil if the run didn't qualify.
-        // Only a `.grantedDailyMinutes` outcome has anything to undo on
-        // Discard; see `UsageTracker.completeRun`.
+        let rewardSeconds: Int
+        // Non-nil only when the run finished while locked out — the
+        // reward went straight to `UsageTracker` instead of the ledger.
+        // See `UsageTracker.isLockedOut`.
         let rewardOutcome: RunRewardOutcome?
+        // Held directly (not re-queried) so Discard can delete exactly
+        // the event this run inserted, when the reward went to the
+        // Energy Ledger instead (`rewardOutcome == nil`).
+        let ledgerEvent: LedgerEvent?
     }
 
     @State private var pendingRun: PendingRun?
@@ -68,7 +72,7 @@ struct RunView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
 
-            Text("Run at least \(qualifyingDistanceText) or \(settings.qualifyingDurationMinutes) min to earn +\(settings.minutesPerRun) min of viewing time.")
+            Text("Every minute you run earns \(settings.secondsCreditPerRunMinute)s of viewing time — extends today's allowance right now if you're locked out, or banks to your Energy Ledger otherwise.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
 
@@ -94,18 +98,9 @@ struct RunView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
 
-            VStack(spacing: 6) {
-                ProgressView(value: qualifyingProgress)
-                    .tint(qualifyingProgress >= 1 ? .green : .accentColor)
-                Text(
-                    qualifyingProgress >= 1
-                        ? "Qualified — finish anytime to bank +\(settings.minutesPerRun) min"
-                        : "\(Int(qualifyingProgress * 100))% to qualifying (\(qualifyingDistanceText) or \(settings.qualifyingDurationMinutes) min)"
-                )
+            Text("Currently worth +\(currentRewardSeconds)s")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            }
 
             Button("Finish Run", role: .destructive) {
                 finishRun()
@@ -137,18 +132,8 @@ struct RunView: View {
         }
     }
 
-    // How close the in-progress run is to qualifying, as the better
-    // (higher) of the two independent thresholds — matches the "meets
-    // EITHER" qualifying rule, so getting close on either one shows
-    // progress.
-    private var qualifyingProgress: Double {
-        let distanceProgress = settings.qualifyingDistanceKm > 0
-            ? runTracker.distanceKm / settings.qualifyingDistanceKm
-            : 0
-        let durationProgress = settings.qualifyingDurationMinutes > 0
-            ? Double(runTracker.elapsedSeconds) / Double(settings.qualifyingDurationMinutes * 60)
-            : 0
-        return min(1, max(distanceProgress, durationProgress))
+    private var currentRewardSeconds: Int {
+        Int(Double(runTracker.elapsedSeconds) * Double(settings.secondsCreditPerRunMinute) / 60.0)
     }
 
     private func finishRun() {
@@ -158,19 +143,24 @@ struct RunView: View {
         let route = runTracker.routeCoordinates
         runTracker.stop()
 
-        let qualifiesByDistance = distanceKm >= settings.qualifyingDistanceKm
-        let qualifiesByDuration = elapsedSeconds >= settings.qualifyingDurationMinutes * 60
-        let qualifies = qualifiesByDistance || qualifiesByDuration
+        let rewardSeconds = Int(Double(elapsedSeconds) * Double(settings.secondsCreditPerRunMinute) / 60.0)
 
         // Rough calorie estimate: roughly 1 kcal burnt per kg of body
         // weight per km covered — a commonly cited approximation for
         // running. No heart-rate/incline data, so treat it as a ballpark.
         let estimatedCalories = settings.weightKg * distanceKm
         let finishedAt = Date()
+        let distanceText = String(format: "%.2f km", distanceKm)
 
-        let outcome = qualifies ? usageTracker.completeRun(minutes: settings.minutesPerRun) : nil
-        if qualifies, settings.enableEnergyLedger {
-            modelContext.insert(LedgerEvent(date: finishedAt, seconds: settings.minutesPerRun * 60, note: "\(String(format: "%.2f km", distanceKm)) run"))
+        let outcome: RunRewardOutcome?
+        var ledgerEvent: LedgerEvent?
+        if usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes) {
+            outcome = usageTracker.completeExerciseReward(seconds: rewardSeconds)
+        } else {
+            outcome = nil
+            let event = LedgerEvent(date: finishedAt, seconds: rewardSeconds, note: "\(distanceText) run")
+            modelContext.insert(event)
+            ledgerEvent = event
         }
 
         pendingRun = PendingRun(
@@ -179,18 +169,20 @@ struct RunView: View {
             durationSeconds: elapsedSeconds,
             route: route,
             estimatedCalories: estimatedCalories,
-            qualified: qualifies,
-            rewardOutcome: outcome
+            rewardSeconds: rewardSeconds,
+            rewardOutcome: outcome,
+            ledgerEvent: ledgerEvent
         )
         runName = finishedAt.formatted(date: .abbreviated, time: .shortened)
 
+        let minutesText = "\(elapsedSeconds / 60) min"
         switch outcome {
         case .grantedDailyMinutes:
-            resultMessage = "Nice run! \(String(format: "%.2f km", distanceKm)) in \(elapsedSeconds / 60) min.\n+\(settings.minutesPerRun) min added."
+            resultMessage = "Nice run! \(distanceText) in \(minutesText).\n+\(rewardSeconds)s added to today's allowance."
         case .clearedCooldown:
-            resultMessage = "Nice run! \(String(format: "%.2f km", distanceKm)) in \(elapsedSeconds / 60) min.\nBinge cooldown cleared — no extra daily minutes needed."
+            resultMessage = "Nice run! \(distanceText) in \(minutesText).\nBinge cooldown cleared — no extra daily minutes needed."
         case nil:
-            resultMessage = "Run \(qualifyingDistanceText) or \(settings.qualifyingDurationMinutes) min to qualify.\nThis run: \(String(format: "%.2f km", distanceKm)) in \(elapsedSeconds / 60) min — no reward this time."
+            resultMessage = "Nice run! \(distanceText) in \(minutesText).\n+\(rewardSeconds)s banked to your Energy Ledger."
         }
     }
 
@@ -204,23 +196,25 @@ struct RunView: View {
             distanceMeters: pendingRun.distanceMeters,
             durationSeconds: pendingRun.durationSeconds,
             estimatedCalories: pendingRun.estimatedCalories,
-            qualified: pendingRun.qualified,
+            qualified: true,
             routeCoordinates: pendingRun.route.map { RunCoordinate(latitude: $0.latitude, longitude: $0.longitude) }
         )
         modelContext.insert(record)
     }
 
-    // Throws the run away instead of saving it — claws back any daily
-    // bonus minutes it earned too, so a discarded run really does behave
-    // as if it never happened. If the run instead cleared a cooldown,
-    // there's nothing to undo (see `UsageTracker.revokeBonusMinutes`).
+    // Throws the run away instead of saving it — undoes whichever side
+    // the reward actually went to, so a discarded run really does behave
+    // as if it never happened: claws back daily bonus seconds if it
+    // extended today's allowance, or deletes the `LedgerEvent` if it
+    // banked to the ledger instead. If it cleared a cooldown, there's
+    // nothing to undo (see `UsageTracker.revokeBonusSeconds`).
     private func discardPendingRun() {
-        guard let pendingRun, pendingRun.rewardOutcome == .grantedDailyMinutes else { return }
-        usageTracker.revokeBonusMinutes(settings.minutesPerRun)
-    }
-
-    private var qualifyingDistanceText: String {
-        String(format: "%.1f km", settings.qualifyingDistanceKm)
+        guard let pendingRun else { return }
+        if pendingRun.rewardOutcome == .grantedDailyMinutes {
+            usageTracker.revokeBonusSeconds(pendingRun.rewardSeconds)
+        } else if let ledgerEvent = pendingRun.ledgerEvent {
+            modelContext.delete(ledgerEvent)
+        }
     }
 
     private var formattedDuration: String {
@@ -237,5 +231,5 @@ struct RunView: View {
     .environmentObject(AppSettings())
     .environmentObject(UsageTracker())
     .environmentObject(RunTracker())
-    .modelContainer(for: RunRecord.self, inMemory: true)
+    .modelContainer(for: [RunRecord.self, LedgerEvent.self], inMemory: true)
 }

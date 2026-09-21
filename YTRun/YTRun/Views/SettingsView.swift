@@ -42,67 +42,16 @@ struct SettingsView: View {
                 Stepper(value: $settings.cooldownMinutes, in: 5...240, step: 5) {
                     limitRow(title: "Cooldown", minutes: settings.cooldownMinutes)
                 }
-                Stepper(value: $settings.bingeResetAfterMinutes, in: 5...120, step: 5) {
-                    limitRow(title: "Reset after break", minutes: settings.bingeResetAfterMinutes)
-                }
             } header: {
-                sectionHeader("Binge protection", info: "Watching \(settings.bingeLimitMinutes) cumulative minutes (pauses don't reset it) triggers a \(settings.cooldownMinutes)-minute lockout, independent of the daily total. A run ends the cooldown early, but doesn't also add daily minutes — the two rewards don't stack. Going \(settings.bingeResetAfterMinutes) minutes without watching anything also resets the binge counter on its own, even if you never hit the limit.")
+                sectionHeader("Binge protection", info: "Watching \(settings.bingeLimitMinutes) cumulative minutes (pauses don't reset it) triggers a \(settings.cooldownMinutes)-minute lockout, independent of the daily total. A reward claimed while locked out ends the cooldown early, but doesn't also add daily minutes — the two don't stack.")
             }
 
             Section {
-                Stepper(value: $settings.minutesPerRun, in: 5...120, step: 5) {
-                    limitRow(title: "Minutes per run", minutes: settings.minutesPerRun)
+                NavigationLink("Exercises") {
+                    ExerciseSettingsView()
                 }
             } header: {
-                sectionHeader("Run reward", info: "Extra viewing minutes granted each time a qualifying run is completed (real or simulated).")
-            }
-
-            Section {
-                Stepper(value: $settings.qualifyingDistanceKm, in: 0.5...42, step: 0.5) {
-                    HStack {
-                        Text("Minimum distance")
-                        Spacer()
-                        Text(String(format: "%.1f km", settings.qualifyingDistanceKm))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Stepper(value: $settings.qualifyingDurationMinutes, in: 5...180, step: 5) {
-                    limitRow(title: "Minimum duration", minutes: settings.qualifyingDurationMinutes)
-                }
-            } header: {
-                sectionHeader("Qualifying run", info: "A run counts if it meets EITHER the distance or the duration threshold — not both.")
-            }
-
-            Section {
-                Stepper(value: $settings.weightKg, in: 30...150, step: 1) {
-                    HStack {
-                        Text("Weight")
-                        Spacer()
-                        Text(String(format: "%.0f kg", settings.weightKg))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                sectionHeader("Calorie estimate", info: "Used to roughly estimate calories burnt per run (distance × weight). Not medically precise — no heart rate data is used.")
-            }
-
-            Section {
-                Stepper(value: $settings.listenRatePercent, in: 0...100, step: 5) {
-                    percentRow(title: "Listen rate", percent: settings.listenRatePercent)
-                }
-                Stepper(value: $settings.carRatePercent, in: 0...100, step: 5) {
-                    percentRow(title: "Car rate", percent: settings.carRatePercent)
-                }
-            } header: {
-                sectionHeader("Background listening rate", info: "How much of your daily/binge allowance background listening actually costs, relative to watching with the screen on (always 100%). E.g. a 50% listen rate means 10 minutes of background listening only uses 5 minutes of allowance. The daily/binge limits themselves don't change — only how fast background listening eats into them.")
-            }
-
-            Section {
-                TextField("e.g. BYD", text: $settings.carBluetoothDeviceName)
-                    .textInputAutocapitalization(.words)
-                    .autocorrectionDisabled()
-            } header: {
-                sectionHeader("Car Bluetooth device", info: "Daily History splits background listening into \"Listen\" and \"Car.\" CarPlay is detected automatically; for a plain Bluetooth car stereo (most cars), enter its device name here (check Settings → Bluetooth on your phone) — matched as a substring, case-insensitive.")
+                sectionHeader("Exercises", info: "Walk, Run, Push-Ups, Sit-Ups, Lunges, Stairs, and Steps — each with its own on/off switch and reward rate, all on one screen. A reward claimed while locked out extends today's allowance right now; claimed any other time, it only banks Energy Ledger currency for later.")
             }
 
             Section {
@@ -112,143 +61,27 @@ struct SettingsView: View {
             }
 
             Section {
-                Toggle("Show Simulate Run Button", isOn: $settings.enableSimulateRun)
-            } header: {
-                sectionHeader("Simulate Run", info: "When off (the default), the Locked screen only offers a real \"Start a Run\" — no one-tap way to grant the reward without actually running. Turn this on temporarily if you need to test the reward flow itself — using it once turns this back off automatically, so it doesn't just sit there armed.")
-            }
-
-            Section {
-                Toggle("Show Walk Option", isOn: $settings.enableWalkOption)
-                if settings.enableWalkOption {
-                    Toggle("Allow Video While Walking", isOn: $settings.walkAllowsVideo)
-                }
-            } header: {
-                sectionHeader("Walk", info: "Adds a \"Walk\" option to the Locked screen — a live gate, not a reward: unlocks playback immediately, live against your actual step count (a real step resumes it right away; about 8 seconds with none pauses it, with a \"Not moving\" notice, until you start again). Nothing is banked or saved, and it doesn't touch your daily/binge allowance at all — it's a separate channel that only exists for as long as you're actually walking. Off by default restricts it to audio (Listen Mode); turn \"Allow Video\" on to permit full video too.")
-            }
-
-            Section {
-                Toggle("Show Push-Ups Option", isOn: $settings.enablePushUpOption)
-                Toggle("Show Sit-Ups Option", isOn: $settings.enableSitUpOption)
-                Toggle("Show Lunges Option", isOn: $settings.enableLungeOption)
-                if settings.enablePushUpOption || settings.enableSitUpOption || settings.enableLungeOption {
-                    Stepper(value: $settings.repsPerExerciseSet, in: 1...50) {
-                        HStack {
-                            Text("Reps per set")
-                            Spacer()
-                            Text("\(settings.repsPerExerciseSet)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.secondsPerExerciseSet, in: 15...600, step: 15) {
-                        HStack {
-                            Text("Reward per set")
-                            Spacer()
-                            Text("\(settings.secondsPerExerciseSet)s")
-                                .foregroundStyle(.secondary)
-                        }
+                Stepper(value: $settings.ledgerWindowDays, in: 1...30) {
+                    HStack {
+                        Text("Rolling window")
+                        Spacer()
+                        Text("\(settings.ledgerWindowDays) days")
+                            .foregroundStyle(.secondary)
                     }
                 }
-            } header: {
-                sectionHeader("Exercises", info: "Each adds an option to the Locked screen's Exercise picker — counted on-device via the camera (Vision body-pose tracking, nothing recorded or sent anywhere). Unlike Walk, these are banked rewards like a run: every \(settings.repsPerExerciseSet) counted reps of any of them earns \(settings.secondsPerExerciseSet) seconds you claim explicitly, added to today's allowance (or clearing an active cooldown, same either/or rule as a run). All three share this one reps/reward setting.")
-            }
-
-            Section {
-                Toggle("Show Climb Stairs Option", isOn: $settings.enableStairsOption)
-                if settings.enableStairsOption {
-                    Stepper(value: $settings.floorsPerStairSet, in: 1...20) {
-                        HStack {
-                            Text("Floors per set")
-                            Spacer()
-                            Text("\(settings.floorsPerStairSet)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.secondsPerStairSet, in: 15...600, step: 15) {
-                        HStack {
-                            Text("Reward per set")
-                            Spacer()
-                            Text("\(settings.secondsPerStairSet)s")
-                                .foregroundStyle(.secondary)
-                        }
+                Stepper(value: $settings.secondsPerCreditUse, in: 60...3600, step: 60) {
+                    HStack {
+                        Text("\"Use Credit\" grants")
+                        Spacer()
+                        Text("\(settings.secondsPerCreditUse / 60) min")
+                            .foregroundStyle(.secondary)
                     }
                 }
-            } header: {
-                sectionHeader("Stairs", info: "Adds a \"Climb Stairs\" option to the Locked screen's Exercise picker — counted via the phone's barometer (the same signal Apple's own Fitness app uses for \"Flights Climbed\"), no camera involved at all. Every \(settings.floorsPerStairSet) floors earns \(settings.secondsPerStairSet) seconds, same claim-explicitly rule as the other exercises.")
-            }
-
-            Section {
-                Toggle("Show Energy Balance", isOn: $settings.enableEnergyLedger)
-                if settings.enableEnergyLedger {
-                    Stepper(value: $settings.ledgerWindowDays, in: 1...30) {
-                        HStack {
-                            Text("Rolling window")
-                            Spacer()
-                            Text("\(settings.ledgerWindowDays) days")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.stepsPerCreditSet, in: 1000...30000, step: 500) {
-                        HStack {
-                            Text("Steps")
-                            Spacer()
-                            Text("\(settings.stepsPerCreditSet)")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.secondsPerStepCredit, in: 300...7200, step: 300) {
-                        HStack {
-                            Text("Worth")
-                            Spacer()
-                            Text("\(settings.secondsPerStepCredit / 60) min")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.secondsPerCreditUse, in: 60...3600, step: 60) {
-                        HStack {
-                            Text("\"Use Credit\" grants")
-                            Spacer()
-                            Text("\(settings.secondsPerCreditUse / 60) min")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Button("Reset Balance", role: .destructive) {
-                        showingResetBalanceConfirmation = true
-                    }
+                Button("Reset Balance", role: .destructive) {
+                    showingResetBalanceConfirmation = true
                 }
             } header: {
-                sectionHeader("Energy Ledger", info: "A separate, honesty-based balance — not another hard limit. Tracks steps (read passively from your phone's own step history, minus whatever a live Walk session already used) and claimed exercise/run credit against actual watch time, over the rolling window below. Shown on the Locked screen along with a \"Use Credit\" button that grants extra time without exercising first, pushing the balance into deficit with no ceiling — paying it back later is entirely up to you.")
-            }
-
-            Section {
-                Toggle("Enable Late-Night Penalty", isOn: $settings.enableLateNightPenalty)
-                if settings.enableLateNightPenalty {
-                    Stepper(value: $settings.lateNightStartHour, in: 0...23) {
-                        HStack {
-                            Text("Starts at")
-                            Spacer()
-                            Text(hourLabel(settings.lateNightStartHour))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.lateNightEndHour, in: 0...23) {
-                        HStack {
-                            Text("Ends at")
-                            Spacer()
-                            Text(hourLabel(settings.lateNightEndHour))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Stepper(value: $settings.lateNightPenaltySecondsPerMinute, in: 0...180, step: 15) {
-                        HStack {
-                            Text("Penalty rate")
-                            Spacer()
-                            Text("\(settings.lateNightPenaltySecondsPerMinute)s per min watched")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            } header: {
-                sectionHeader("Late-Night Penalty", info: "An extra deduction from the Energy Ledger for watching during these hours — on top of that time already counting as normal spend, not instead of it. At the default rate, 10 minutes watched in the window costs an extra 10 minutes off your balance.")
+                sectionHeader("Energy Ledger", info: "A separate, honesty-based balance — not another hard limit. Tracks steps/exercise/run credit against actual watch time, over the rolling window below. Shown on the Home and Locked screens along with a \"Use Credit\" button that grants extra time without exercising first, pushing the balance into deficit with no ceiling — paying it back later is entirely up to you.")
             }
 
             Section {
@@ -273,15 +106,7 @@ struct SettingsView: View {
                     AIProvidersView()
                 }
             } header: {
-                sectionHeader("YTRun Gateway", info: "Always powers Downloads on the YouTube screen. Powers Summarize too, unless a different default is chosen on the \"AI Providers\" screen below — where Grok, OpenAI, Gemini, and Claude can each be configured with their own key.")
-            }
-
-            Section {
-                TextField("Shortcut name", text: $settings.chatGPTShortcutName)
-                    .textInputAutocapitalization(.words)
-                    .autocorrectionDisabled()
-            } header: {
-                sectionHeader("ChatGPT Shortcut", info: "Powers \"Summarize via ChatGPT\" on the YouTube screen — a peer alternative to YTRun Gateway that uses your own ChatGPT app via a Shortcut, with no server involved. Must exactly match the Shortcut's name in the Shortcuts app. See chatgpt-shortcut-setup.md for how to build it.")
+                sectionHeader("YTRun Gateway", info: "Always powers Downloads on the YouTube screen. Powers Summarize too, unless a different default is chosen on the \"AI Providers\" screen below — where Grok, OpenAI, Gemini, Claude, and the ChatGPT Shortcut can each be configured with their own key.")
             }
 
             Section {
@@ -304,8 +129,7 @@ struct SettingsView: View {
                         usageTracker.recordTick(
                             weight: 1.0,
                             bingeLimitMinutes: settings.bingeLimitMinutes,
-                            cooldownMinutes: settings.cooldownMinutes,
-                            bingeResetAfterMinutes: settings.bingeResetAfterMinutes
+                            cooldownMinutes: settings.cooldownMinutes
                         )
                     }
                 }
@@ -384,27 +208,12 @@ struct SettingsView: View {
         }
     }
 
-    private func hourLabel(_ hour: Int) -> String {
-        let period = hour < 12 ? "AM" : "PM"
-        let displayHour = hour % 12 == 0 ? 12 : hour % 12
-        return "\(displayHour) \(period)"
-    }
-
-    // Small reusable row so the three sections stay visually consistent.
+    // Small reusable row so the sections stay visually consistent.
     private func limitRow(title: String, minutes: Int) -> some View {
         HStack {
             Text(title)
             Spacer()
             Text("\(minutes) min")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private func percentRow(title: String, percent: Int) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text("\(percent)%")
                 .foregroundStyle(.secondary)
         }
     }

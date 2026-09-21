@@ -110,10 +110,8 @@ struct ContentView: View {
                         MenuTile(title: "Exercises", systemImage: "figure.strengthtraining.traditional", color: .pink, compact: true) {
                             ExercisePickerView()
                         }
-                        if settings.enableEnergyLedger {
-                            MenuTile(title: "Habits", systemImage: "checklist", color: .teal, compact: true) {
-                                HabitsView()
-                            }
+                        MenuTile(title: "Habits", systemImage: "checklist", color: .teal, compact: true) {
+                            HabitsView()
                         }
                     }
 
@@ -155,8 +153,7 @@ struct ContentView: View {
                 if walkModeManager.isActive {
                     return walkModeManager.isCurrentlyMoving
                 }
-                return !(usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
-                    || usageTracker.isInCooldown)
+                return !usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes)
             }
             // Lets the YouTube screen respect Settings' "Restrict Shorts"
             // toggle — see `YouTubeWebViewStore`.
@@ -181,25 +178,19 @@ struct ContentView: View {
         }
     }
 
-    // One combined card instead of the separate "hard limits" and
-    // "ledger" cards this used to be — every number here is implicitly
-    // "today" (or whichever day is selected below), so none of the
-    // individual tiles repeat that in their own label. Prev/next
-    // navigation and the trend/pie charts only make sense with the
-    // Energy Ledger on; with it off this just shows the two hard-limit
-    // tiles, same as the original `statsCard` did.
+    // One combined card — every number here is implicitly "today" (or
+    // whichever day is selected below), so none of the individual tiles
+    // repeat that in their own label.
     private var dashboardBox: some View {
         VStack(spacing: 12) {
-            if settings.enableEnergyLedger {
-                dateNavigationHeader
-            }
+            dateNavigationHeader
 
             LazyVGrid(columns: gridColumns, spacing: 10) {
                 if isSelectedDateToday {
-                    statTile(title: "Daily left", value: minutesText(usageTracker.remainingDailySeconds(dailyLimitMinutes: settings.dailyLimitMinutes)))
+                    statTile(title: "Daily left", value: minutesText(usageTracker.remainingDailySeconds(dailyLimitMinutes: settings.dailyLimitMinutes)), tint: dailyLeftTint)
                     statTile(title: "Binge left", value: minutesText(usageTracker.bingeRemainingSeconds(bingeLimitMinutes: settings.bingeLimitMinutes)))
                 }
-                if settings.enableEnergyLedger, let stats = energyLedgerManager.stats(for: selectedDate) {
+                if let stats = energyLedgerManager.stats(for: selectedDate) {
                     navigableStatTile(title: "Earned", value: minutesText(stats.earnedSeconds)) { CreditBreakdownView() }
                     navigableStatTile(title: "Spent", value: minutesText(stats.spentSeconds)) { UsageBreakdownView() }
                     statTile(
@@ -211,31 +202,40 @@ struct ContentView: View {
                 }
             }
 
-            if settings.enableEnergyLedger {
-                Divider()
-                // Trend first (the "how am I doing lately" question),
-                // then the selected day's mix — matches the order asked
-                // for these ("last seven days... then today's spend and
-                // activities").
-                BalanceTrendChart()
-                CategoryPieChart(date: selectedDate)
-            }
+            Divider()
+            // Trend first (the "how am I doing lately" question), then
+            // the selected day's mix — matches the order asked for these
+            // ("last seven days... then today's spend and activities").
+            BalanceTrendChart()
+            CategoryPieChart(date: selectedDate)
         }
         .padding(.vertical, 16)
         .padding(.horizontal, 12)
         .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
-        // An active cooldown only lifts once its timer passes, and a
-        // partial binge session only forgives itself after enough
-        // inactivity — refresh every second to catch both live instead of
-        // looking frozen until the next video plays.
+        // An active cooldown only lifts once its timer passes — refresh
+        // every second to catch that live instead of looking frozen until
+        // the next video plays.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
+            usageTracker.refreshBingeState()
             // `refresh` self-throttles to every ~8s internally, so piggy-
             // backing on this existing 1-second tick (rather than adding
             // a second timer) costs nothing extra in practice.
             energyLedgerManager.refresh(modelContext: modelContext, settings: settings)
         }
+    }
+
+    // Green while still within today's *intended* limit; once past it,
+    // orange if the Energy Ledger balance can still cover it (you're
+    // spending into today's/rolling profit, but not in debt yet) or red
+    // once it can't (over the intended limit AND in debt). Based on raw
+    // watched-today seconds rather than `remainingDailySeconds` (which
+    // already reflects any borrowed/earned extension) — going past the
+    // real target you set is the thing being flagged here, even while a
+    // borrowed extension still shows a positive number.
+    private var dailyLeftTint: Color {
+        guard usageTracker.todayUsedSeconds >= settings.dailyLimitMinutes * 60 else { return .green }
+        return energyLedgerManager.balanceSeconds >= 0 ? .orange : .red
     }
 
     private var dateNavigationHeader: some View {

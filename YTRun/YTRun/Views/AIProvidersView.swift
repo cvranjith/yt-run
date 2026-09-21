@@ -29,6 +29,16 @@ struct AIProvidersView: View {
                     }
                 }
             }
+
+            Section {
+                TextField("Shortcut name", text: $settings.chatGPTShortcutName)
+                    .textInputAutocapitalization(.words)
+                    .autocorrectionDisabled()
+            } header: {
+                Text("ChatGPT Shortcut")
+            } footer: {
+                Text("Powers \"Summarize via ChatGPT\" on the YouTube screen — a peer alternative to the providers above that uses your own ChatGPT app via a Shortcut, with no server involved. Must exactly match the Shortcut's name in the Shortcuts app. See chatgpt-shortcut-setup.md for how to build it.")
+            }
         }
         .navigationTitle("AI Providers")
         .navigationBarTitleDisplayMode(.inline)

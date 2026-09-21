@@ -8,13 +8,14 @@ import AVFoundation
 import SwiftData
 
 // Counts reps of one `ExerciseKind` on-device via Vision body-pose
-// tracking and, in sets of `settings.repsPerExerciseSet`, lets you
-// claim `settings.secondsPerExerciseSet` of viewing/listening time — a
-// banked reward like a run (see UsageTracker.completeExerciseReward),
-// just counted via the camera instead of GPS distance/duration.
-// Reachable both from Home (anytime, via ExercisePickerView) and, when
-// enabled in Settings, from the Locked screen as an actual way to earn
-// back time.
+// tracking, each kind with its own independent reps/reward pair (see
+// `repsPerSet`/`secondsPerSet` below). Claiming a completed set routes
+// through `UsageTracker.isLockedOut`: while locked out, it extends
+// today's real allowance right now (same mechanism a run/"Use Credit"
+// use); otherwise it only banks Energy Ledger currency for later, so
+// proactive exercise can never silently raise today's ceiling in
+// advance. Reachable both from Home (anytime, via ExercisePickerView)
+// and, when enabled in Settings, from the Locked screen.
 struct ExerciseTrainingView: View {
     let kind: ExerciseKind
 
@@ -137,20 +138,36 @@ struct ExerciseTrainingView: View {
     // MARK: - Reward
 
     private var unclaimedReps: Int { max(0, counter.repCount - claimedRepCount) }
-    private var repsPerSet: Int { max(1, settings.repsPerExerciseSet) }
+
+    private var repsPerSet: Int {
+        switch kind {
+        case .pushUps: return max(1, settings.repsPerPushUpSet)
+        case .sitUps: return max(1, settings.repsPerSitUpSet)
+        case .lunges: return max(1, settings.repsPerLungeSet)
+        }
+    }
+
+    private var secondsPerSet: Int {
+        switch kind {
+        case .pushUps: return settings.secondsPerPushUpSet
+        case .sitUps: return settings.secondsPerSitUpSet
+        case .lunges: return settings.secondsPerLungeSet
+        }
+    }
+
     private var setsReadyToClaim: Int { unclaimedReps / repsPerSet }
     private var repsIntoCurrentSet: Int { unclaimedReps % repsPerSet }
 
     @ViewBuilder
     private var rewardProgressView: some View {
         if setsReadyToClaim > 0 {
-            Text("🎉 Ready to claim: +\(setsReadyToClaim * settings.secondsPerExerciseSet)s")
+            Text("🎉 Ready to claim: +\(setsReadyToClaim * secondsPerSet)s")
                 .font(.headline)
                 .foregroundStyle(.green)
             Button("Claim Reward") { claimReward() }
                 .buttonStyle(.borderedProminent)
         } else {
-            Text("\(repsIntoCurrentSet)/\(repsPerSet) \(kind.displayName.lowercased()) for +\(settings.secondsPerExerciseSet)s")
+            Text("\(repsIntoCurrentSet)/\(repsPerSet) \(kind.displayName.lowercased()) for +\(secondsPerSet)s")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.85))
             ProgressView(value: Double(repsIntoCurrentSet), total: Double(repsPerSet))
@@ -162,16 +179,18 @@ struct ExerciseTrainingView: View {
     private func claimReward() {
         let sets = setsReadyToClaim
         guard sets > 0 else { return }
-        let seconds = sets * settings.secondsPerExerciseSet
+        let seconds = sets * secondsPerSet
         claimedRepCount += sets * repsPerSet
-        switch usageTracker.completeExerciseReward(seconds: seconds) {
-        case .grantedDailyMinutes:
-            rewardMessage = "+\(seconds) seconds added to today's allowance!"
-        case .clearedCooldown:
-            rewardMessage = "Cooldown cleared — no extra time needed right now."
-        }
-        if settings.enableEnergyLedger {
+        if usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes) {
+            switch usageTracker.completeExerciseReward(seconds: seconds) {
+            case .grantedDailyMinutes:
+                rewardMessage = "+\(seconds) seconds added to today's allowance!"
+            case .clearedCooldown:
+                rewardMessage = "Cooldown cleared — no extra time needed right now."
+            }
+        } else {
             modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * repsPerSet) \(kind.displayName.lowercased())"))
+            rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."
         }
     }
 

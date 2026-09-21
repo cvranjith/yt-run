@@ -38,9 +38,7 @@ struct LockedView: View {
                     .multilineTextAlignment(.center)
             }
 
-            if settings.enableEnergyLedger {
-                energyBalanceLabel
-            }
+            energyBalanceLabel
 
             // A run either ends an active cooldown early, or tops up the
             // daily allowance — never both from the same run. See
@@ -97,35 +95,11 @@ struct LockedView: View {
             // watching, that watch time still lands in `WatchSegment` like
             // any other, so it shows up as a deficit in the balance above
             // until real exercise offsets it — see `EnergyLedgerManager`.
-            if settings.enableEnergyLedger {
-                Button("Use Credit (+\(settings.secondsPerCreditUse / 60) min)") {
-                    _ = usageTracker.completeExerciseReward(seconds: settings.secondsPerCreditUse)
-                    energyLedgerManager.refresh(modelContext: modelContext, settings: settings, force: true)
-                }
-                .buttonStyle(.bordered)
+            Button("Use Credit (+\(settings.secondsPerCreditUse / 60) min)") {
+                _ = usageTracker.completeExerciseReward(seconds: settings.secondsPerCreditUse)
+                energyLedgerManager.refresh(modelContext: modelContext, settings: settings, force: true)
             }
-
-            // Hidden unless explicitly turned on in Settings — this
-            // bypasses the actual run (no GPS/distance/duration check at
-            // all), which defeats the entire point of the app if it's
-            // always sitting right here as an easy way out. Requiring a
-            // trip to Settings first adds enough friction that it's a
-            // deliberate choice, not a one-tap bypass, while still being
-            // available for legitimately testing the reward flow.
-            //
-            // Auto-disables itself the moment it's used (turning the
-            // Settings toggle back off), so that friction is per-use, not
-            // just per-session — using it again means going back to
-            // Settings and turning it on again, rather than it just
-            // sitting here armed indefinitely once switched on.
-            if settings.enableSimulateRun {
-                Button(simulateRunLabel) {
-                    usageTracker.completeRun(minutes: settings.minutesPerRun)
-                    settings.enableSimulateRun = false
-                }
-                .buttonStyle(.bordered)
-                .font(.footnote)
-            }
+            .buttonStyle(.bordered)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -134,13 +108,9 @@ struct LockedView: View {
         // screen would stay stuck showing Locked even after the wait is
         // over.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
+            usageTracker.refreshBingeState()
             energyLedgerManager.refresh(modelContext: modelContext, settings: settings)
         }
-    }
-
-    private var simulateRunLabel: String {
-        usageTracker.isInCooldown ? "Simulate Run (ends cooldown)" : "Simulate Run (+\(settings.minutesPerRun) min)"
     }
 
     private var energyBalanceLabel: some View {

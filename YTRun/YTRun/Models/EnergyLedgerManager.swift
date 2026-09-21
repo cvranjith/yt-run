@@ -9,7 +9,8 @@ import CoreMotion
 import SwiftData
 
 // A rolling, honesty-based balance of "earned" (steps + explicitly
-// claimed exercise/run credit) vs "spent" (actual watch time) over a
+// claimed exercise/run credit made while *not* locked out — see
+// `UsageTracker.isLockedOut`) vs "spent" (actual watch time) over a
 // trailing window of days — entirely separate from `UsageTracker`'s
 // hard daily/binge gates, which this never touches. It only powers a
 // display and the Locked screen's "Use Credit" spend, both read-only
@@ -64,7 +65,6 @@ final class EnergyLedgerManager: ObservableObject {
     private static let minimumRefreshInterval: TimeInterval = 8
 
     func refresh(modelContext: ModelContext, settings: AppSettings, force: Bool = false) {
-        guard settings.enableEnergyLedger else { return }
         if !force, let lastRefreshAt, Date().timeIntervalSince(lastRefreshAt) < Self.minimumRefreshInterval {
             return
         }
@@ -100,14 +100,18 @@ final class EnergyLedgerManager: ObservableObject {
         let stepsPerCreditSet = max(1, settings.stepsPerCreditSet)
         let secondsPerStepCredit = settings.secondsPerStepCredit
 
+        // The predefined "Late-Night Penalty" system habit (see
+        // `HabitType`) — self-heals via `ensureSystemLateNightHabit` in
+        // case this is the first place that's ever needed it.
+        HabitType.ensureSystemLateNightHabit(modelContext: modelContext)
+        let lateNightHabit = (try? modelContext.fetch(FetchDescriptor<HabitType>(predicate: #Predicate { $0.isSystem })))?.first
+
         // Approximated by each segment's *start* hour, same as
         // `UsageBreakdownView`'s time-of-day split — segments are
         // typically many seconds long and rarely straddle the window's
         // edge, so this is close enough without minute-level splitting.
         let lateNightByDay: [Date: Int]
-        if settings.enableLateNightPenalty {
-            let start = settings.lateNightStartHour
-            let end = settings.lateNightEndHour
+        if let lateNightHabit, lateNightHabit.isEnabled, let start = lateNightHabit.startHour, let end = lateNightHabit.endHour {
             func isLateNightHour(_ hour: Int) -> Bool {
                 guard start != end else { return false }
                 return start < end ? (hour >= start && hour < end) : (hour >= start || hour < end)
@@ -120,7 +124,7 @@ final class EnergyLedgerManager: ObservableObject {
         } else {
             lateNightByDay = [:]
         }
-        let penaltySecondsPerMinute = settings.lateNightPenaltySecondsPerMinute
+        let penaltySecondsPerMinute = lateNightHabit?.secondsPerLog ?? 0
 
         var dayStarts: [Date] = []
         var cursor = windowStart

@@ -98,8 +98,7 @@ struct YouTubeView: View {
     // this just decides whether to show the locked screen at all.
     private var isLocked: Bool {
         guard !walkModeManager.isActive else { return false }
-        return usageTracker.isDailyLimitReached(dailyLimitMinutes: settings.dailyLimitMinutes)
-            || usageTracker.isInCooldown
+        return usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes)
     }
 
     var body: some View {
@@ -156,22 +155,15 @@ struct YouTubeView: View {
                         }
 
                         let isBackground = scenePhase != .active
-                        // Only worth checking the audio route while
-                        // actually backgrounded — foreground playback is
-                        // always "View" regardless of output.
-                        let isCarAudio = isBackground && CarAudioDetector.isCarAudioActive(carDeviceName: settings.carBluetoothDeviceName)
-                        let weight: Double = !isBackground ? 1.0
-                            : (isCarAudio ? Double(settings.carRatePercent) : Double(settings.listenRatePercent)) / 100.0
 
                         usageTracker.recordTick(
-                            weight: weight,
+                            weight: 1.0,
                             bingeLimitMinutes: settings.bingeLimitMinutes,
-                            cooldownMinutes: settings.cooldownMinutes,
-                            bingeResetAfterMinutes: settings.bingeResetAfterMinutes
+                            cooldownMinutes: settings.cooldownMinutes
                         )
                         historyRecorder.tick(
                             isBackground: isBackground,
-                            isCarAudio: isCarAudio,
+                            isCarAudio: false,
                             isShorts: webViewStore.currentURL?.path.contains("/shorts/") ?? false,
                             channelName: webViewStore.currentChannelName,
                             videoURL: webViewStore.currentURL?.absoluteString,
@@ -190,7 +182,7 @@ struct YouTubeView: View {
                             webViewStore.forceStopAudio()
                         }
                     } else {
-                        usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
+                        usageTracker.refreshBingeState()
                         historyRecorder.flush(modelContext: modelContext)
                     }
                 }
@@ -562,7 +554,7 @@ struct YouTubeView: View {
                 // These steps already bought live playback for this
                 // session — record a matching deduction so they can't
                 // also inflate the passive daily step credit below.
-                if settings.enableEnergyLedger, steps > 0 {
+                if steps > 0 {
                     let seconds = Int((Double(steps) / Double(max(1, settings.stepsPerCreditSet))) * Double(settings.secondsPerStepCredit))
                     modelContext.insert(LedgerEvent(date: .now, seconds: -seconds, note: "Walk mode (\(steps) steps, already used live)"))
                 }

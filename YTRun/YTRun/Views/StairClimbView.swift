@@ -88,14 +88,16 @@ struct StairClimbView: View {
         guard sets > 0 else { return }
         let seconds = sets * settings.secondsPerStairSet
         claimedFloorCount += sets * floorsPerSet
-        switch usageTracker.completeExerciseReward(seconds: seconds) {
-        case .grantedDailyMinutes:
-            rewardMessage = "+\(seconds) seconds added to today's allowance!"
-        case .clearedCooldown:
-            rewardMessage = "Cooldown cleared — no extra time needed right now."
-        }
-        if settings.enableEnergyLedger {
+        if usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes) {
+            switch usageTracker.completeExerciseReward(seconds: seconds) {
+            case .grantedDailyMinutes:
+                rewardMessage = "+\(seconds) seconds added to today's allowance!"
+            case .clearedCooldown:
+                rewardMessage = "Cooldown cleared — no extra time needed right now."
+            }
+        } else {
             modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * floorsPerSet) floors climbed"))
+            rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."
         }
     }
 

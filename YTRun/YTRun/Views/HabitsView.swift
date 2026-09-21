@@ -6,14 +6,20 @@
 import SwiftUI
 import SwiftData
 
-// User-defined habits, each with its own signed minutes-per-log rate
-// (see `HabitType`) — a reward habit ("Read 10 pages", +10 min) or a
-// penalty one ("Ate a sweet", −10 min). Tapping "Log" inserts one
-// `LedgerEvent` immediately; there's no set/threshold to fill first,
-// unlike the camera-tracked exercises.
+// Manual, user-defined habits (each with its own signed minutes-per-log
+// rate — a reward habit, "Read 10 pages" +10 min, or a penalty one,
+// "Ate a sweet" −10 min; tapping "Log" inserts one `LedgerEvent`
+// immediately, no set/threshold to fill first), plus the one predefined
+// "system" habit — Late-Night Penalty — shown in its own section above
+// with its own toggle/hours/rate instead of a Log button, since it's
+// applied automatically from watch history rather than tapped (see
+// `HabitType`/`EnergyLedgerManager`).
 struct HabitsView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \HabitType.createdAt) private var habits: [HabitType]
+    @Query(filter: #Predicate<HabitType> { !$0.isSystem }, sort: \HabitType.createdAt)
+    private var manualHabits: [HabitType]
+    @Query(filter: #Predicate<HabitType> { $0.isSystem })
+    private var systemHabits: [HabitType]
 
     @State private var isShowingNewHabit = false
     @State private var newHabitName = ""
@@ -21,39 +27,88 @@ struct HabitsView: View {
     @State private var newHabitIsReward = true
     @State private var recentlyLogged: String?
 
+    private var lateNightHabit: HabitType? { systemHabits.first }
+
     var body: some View {
         List {
-            if habits.isEmpty {
-                ContentUnavailableView(
-                    "No Habits Yet",
-                    systemImage: "checklist",
-                    description: Text("Add a habit below — anything you want to reward or discourage yourself for, in your own minutes.")
-                )
-            } else {
-                ForEach(habits) { habit in
-                    Button {
-                        log(habit)
-                    } label: {
+            if let lateNightHabit {
+                Section {
+                    Toggle("Enabled", isOn: Binding(
+                        get: { lateNightHabit.isEnabled },
+                        set: { lateNightHabit.isEnabled = $0 }
+                    ))
+                    Stepper(value: Binding(
+                        get: { lateNightHabit.startHour ?? 22 },
+                        set: { lateNightHabit.startHour = $0 }
+                    ), in: 0...23) {
                         HStack {
-                            VStack(alignment: .leading) {
-                                Text(habit.name)
-                                    .foregroundStyle(.primary)
-                                Text("\(habit.secondsPerLog >= 0 ? "+" : "")\(habit.secondsPerLog / 60) min per log")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("Starts at")
                             Spacer()
-                            if recentlyLogged == habit.name {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                            } else {
-                                Image(systemName: "plus.circle")
-                                    .foregroundStyle(habit.secondsPerLog >= 0 ? .green : .red)
+                            Text(hourLabel(lateNightHabit.startHour ?? 22)).foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: Binding(
+                        get: { lateNightHabit.endHour ?? 5 },
+                        set: { lateNightHabit.endHour = $0 }
+                    ), in: 0...23) {
+                        HStack {
+                            Text("Ends at")
+                            Spacer()
+                            Text(hourLabel(lateNightHabit.endHour ?? 5)).foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: Binding(
+                        get: { lateNightHabit.secondsPerLog },
+                        set: { lateNightHabit.secondsPerLog = $0 }
+                    ), in: 0...180, step: 15) {
+                        HStack {
+                            Text("Penalty rate")
+                            Spacer()
+                            Text("\(lateNightHabit.secondsPerLog)s per min watched").foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Automatic")
+                } footer: {
+                    Text("An extra deduction from the Energy Ledger for watching during these hours — on top of that time already counting as normal spend, not instead of it.")
+                }
+            }
+
+            Section {
+                if manualHabits.isEmpty {
+                    ContentUnavailableView(
+                        "No Habits Yet",
+                        systemImage: "checklist",
+                        description: Text("Add a habit below — anything you want to reward or discourage yourself for, in your own minutes.")
+                    )
+                } else {
+                    ForEach(manualHabits) { habit in
+                        Button {
+                            log(habit)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(habit.name)
+                                        .foregroundStyle(.primary)
+                                    Text("\(habit.secondsPerLog >= 0 ? "+" : "")\(habit.secondsPerLog / 60) min per log")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if recentlyLogged == habit.name {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Image(systemName: "plus.circle")
+                                        .foregroundStyle(habit.secondsPerLog >= 0 ? .green : .red)
+                                }
                             }
                         }
                     }
+                    .onDelete(perform: deleteHabits)
                 }
-                .onDelete(perform: deleteHabits)
+            } header: {
+                Text("Habits")
             }
         }
         .navigationTitle("Habits")
@@ -69,6 +124,9 @@ struct HabitsView: View {
         }
         .sheet(isPresented: $isShowingNewHabit) {
             newHabitSheet
+        }
+        .onAppear {
+            HabitType.ensureSystemLateNightHabit(modelContext: modelContext)
         }
     }
 
@@ -123,7 +181,13 @@ struct HabitsView: View {
     }
 
     private func deleteHabits(at offsets: IndexSet) {
-        for index in offsets { modelContext.delete(habits[index]) }
+        for index in offsets { modelContext.delete(manualHabits[index]) }
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        let period = hour < 12 ? "AM" : "PM"
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return "\(displayHour) \(period)"
     }
 }
 
