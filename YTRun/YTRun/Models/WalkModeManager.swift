@@ -42,9 +42,23 @@ final class WalkModeManager: ObservableObject {
     @Published private(set) var isCurrentlyMoving = true
 
     private let pedometer = CMPedometer()
+    private let activityManager = CMMotionActivityManager()
     private var watchdogTimer: Timer?
     private var lastKnownStepCount = 0
     private var lastStepDate = Date()
+    // CMPedometer's step algorithm can be fooled by a phone lying on a
+    // hard surface with audio playing — the speaker's own vibration
+    // occasionally reads as a phantom footstep, resetting `lastStepDate`
+    // and keeping the stillness timeout from ever firing. A single
+    // confident "stationary" classification from CMMotionActivityManager
+    // (which weighs the fuller motion signature, not just step-like
+    // spikes) overrides that regardless of how recent a "step" was.
+    // Deliberately not required for detecting the *start* of movement —
+    // only used as a veto — since its classifications land a beat slower
+    // than a fresh pedometer step and gating resume on it would
+    // reintroduce the slow-start problem this manager was rewritten to
+    // avoid.
+    private var isConfidentlyStationary = false
 
     // How long with no new reported step before considering yourself
     // stopped. Independent of how fast "moving" is detected (that's
@@ -62,6 +76,7 @@ final class WalkModeManager: ObservableObject {
         isCurrentlyMoving = true
         lastKnownStepCount = 0
         lastStepDate = Date()
+        isConfidentlyStationary = false
 
         guard CMPedometer.isStepCountingAvailable() else { return }
         pedometer.startUpdates(from: Date()) { [weak self] data, _ in
@@ -77,6 +92,16 @@ final class WalkModeManager: ObservableObject {
             }
         }
 
+        if CMMotionActivityManager.isActivityAvailable() {
+            activityManager.startActivityUpdates(to: .main) { [weak self] activity in
+                guard let self, let activity, self.isActive else { return }
+                // Low-confidence reads are common right as the
+                // classifier is still gathering data — not trusted
+                // enough on their own to override a fresh step.
+                self.isConfidentlyStationary = activity.stationary && activity.confidence != .low
+            }
+        }
+
         watchdogTimer?.invalidate()
         watchdogTimer = Timer.scheduledTimer(withTimeInterval: Self.watchdogIntervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.checkStillness() }
@@ -86,12 +111,14 @@ final class WalkModeManager: ObservableObject {
     func stop() {
         isActive = false
         pedometer.stopUpdates()
+        activityManager.stopActivityUpdates()
         watchdogTimer?.invalidate()
         watchdogTimer = nil
     }
 
     private func checkStillness() {
         guard isActive else { return }
-        isCurrentlyMoving = Date().timeIntervalSince(lastStepDate) < Self.stillnessTimeoutSeconds
+        let recentStep = Date().timeIntervalSince(lastStepDate) < Self.stillnessTimeoutSeconds
+        isCurrentlyMoving = recentStep && !isConfidentlyStationary
     }
 }
