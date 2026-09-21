@@ -183,7 +183,13 @@ struct ContentView: View {
     // repeat that in their own label.
     private var dashboardBox: some View {
         VStack(spacing: 12) {
-            dateNavigationHeader
+            Text(isSelectedDateToday ? "Today" : selectedDate.formatted(date: .abbreviated, time: .omitted))
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            // Doubles as the day picker — tap a square to select it,
+            // instead of stepping through prev/next arrows.
+            DayStrip(selectedDate: $selectedDate)
 
             LazyVGrid(columns: gridColumns, spacing: 10) {
                 if isSelectedDateToday {
@@ -198,16 +204,19 @@ struct ContentView: View {
                         value: minutesText(abs(isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds)),
                         tint: (isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds) < 0 ? .red : .green
                     )
-                    statTile(title: "Videos", value: "\(stats.videoCount)")
+                    // Always navigable, unlike Earned/Spent above — this
+                    // one works for any day, not just today (see
+                    // `DaySummaryView`), since it just filters real watch
+                    // history rather than reading `EnergyLedgerManager`'s
+                    // today-only published fields.
+                    NavigationLink {
+                        DaySummaryView(date: selectedDate)
+                    } label: {
+                        statTile(title: "Videos", value: "\(stats.videoCount)")
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-
-            Divider()
-            // Trend first (the "how am I doing lately" question), then
-            // the selected day's mix — matches the order asked for these
-            // ("last seven days... then today's spend and activities").
-            BalanceTrendChart()
-            CategoryPieChart(date: selectedDate)
         }
         .padding(.vertical, 16)
         .padding(.horizontal, 12)
@@ -236,36 +245,6 @@ struct ContentView: View {
     private var dailyLeftTint: Color {
         guard usageTracker.todayUsedSeconds >= settings.dailyLimitMinutes * 60 else { return .green }
         return energyLedgerManager.balanceSeconds >= 0 ? .orange : .red
-    }
-
-    private var dateNavigationHeader: some View {
-        HStack {
-            Button {
-                if let previous = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) {
-                    selectedDate = previous
-                }
-            } label: {
-                Image(systemName: "chevron.left")
-            }
-            .disabled(energyLedgerManager.stats(for: Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate) == nil)
-
-            Spacer()
-
-            Text(isSelectedDateToday ? "Today" : selectedDate.formatted(date: .abbreviated, time: .omitted))
-                .font(.subheadline)
-                .fontWeight(.semibold)
-
-            Spacer()
-
-            Button {
-                if let next = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) {
-                    selectedDate = min(next, Calendar.current.startOfDay(for: Date()))
-                }
-            } label: {
-                Image(systemName: "chevron.right")
-            }
-            .disabled(isSelectedDateToday)
-        }
     }
 
     private func minutesText(_ seconds: Int) -> String {

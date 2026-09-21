@@ -12,7 +12,12 @@ struct DailyDetailView: View {
     let runs: [RunRecord]
 
     @Environment(\.modelContext) private var modelContext
+    @Query private var categories: [ChannelCategory]
     @State private var pendingHide: VideoSummary?
+
+    private var categoryByChannel: [String: String] {
+        Dictionary(uniqueKeysWithValues: categories.map { ($0.channelName, $0.category) })
+    }
 
     private var totalSeconds: Int { segments.reduce(0) { $0 + $1.durationSeconds } }
     private var viewSeconds: Int { segments.filter { !$0.isBackground }.reduce(0) { $0 + $1.durationSeconds } }
@@ -106,6 +111,14 @@ struct DailyDetailView: View {
                     Text("Content type")
                 } footer: {
                     Text("Shorts detection is best-effort — rapid swiping between clips may not always be caught individually.")
+                }
+
+                Section {
+                    CategoryPieChart(date: day)
+                } header: {
+                    Text("Category Mix")
+                } footer: {
+                    Text("Categories are guessed automatically per channel the first time it's watched — tap the badge in the YouTube screen while watching to correct one.")
                 }
             }
 
@@ -208,6 +221,16 @@ struct DailyDetailView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if let category = summary.channel.flatMap({ categoryByChannel[$0] }) {
+                    Text(category)
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.blue)
+                }
             }
         }
         .swipeActions(edge: .trailing) {
@@ -275,4 +298,5 @@ struct DailyDetailView: View {
         )
     }
     .environmentObject(YouTubeWebViewStore())
+    .modelContainer(for: ChannelCategory.self, inMemory: true)
 }

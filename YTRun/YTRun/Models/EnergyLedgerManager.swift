@@ -73,27 +73,30 @@ final class EnergyLedgerManager: ObservableObject {
         let calendar = Calendar.current
         let windowDays = max(1, settings.ledgerWindowDays)
         let today = calendar.startOfDay(for: Date())
-        guard var windowStart = calendar.date(byAdding: .day, value: -(windowDays - 1), to: today) else { return }
-        // "Reset Balance" (Settings) sets this to the moment it was
-        // tapped — clamping the window to it is what makes old debt stop
-        // counting, without deleting any real `WatchSegment`/`LedgerEvent`
-        // rows (those still power Daily History/Run History untouched).
-        if let resetDate = settings.ledgerStartDate {
-            windowStart = max(windowStart, calendar.startOfDay(for: resetDate))
-        }
+        guard let windowStart = calendar.date(byAdding: .day, value: -(windowDays - 1), to: today) else { return }
+        // "Reset Balance" (Settings) sets this to the exact moment it was
+        // tapped — everything from before it is excluded, even earlier
+        // *today*, not just whole days before it (rounding this down to
+        // the start of its day would make a same-day reset a no-op for
+        // today's own numbers, which is exactly the bug this fixes).
+        // Non-destructive: no real `WatchSegment`/`LedgerEvent` row is
+        // touched, so Daily History/Run History (reading those same
+        // tables) are unaffected — only this ledger's filtering below
+        // stops counting anything from before the cutoff.
+        let cutoff = settings.ledgerStartDate.map { max(windowStart, $0) } ?? windowStart
 
         let watchSegments = (try? modelContext.fetch(FetchDescriptor<WatchSegment>())) ?? []
         let ledgerEvents = (try? modelContext.fetch(FetchDescriptor<LedgerEvent>())) ?? []
 
-        let watchedByDay = Dictionary(grouping: watchSegments.filter { $0.date >= windowStart }) {
+        let watchedByDay = Dictionary(grouping: watchSegments.filter { $0.date >= cutoff }) {
             calendar.startOfDay(for: $0.date)
         }.mapValues { $0.reduce(0) { $0 + $1.durationSeconds } }
 
-        let eventsByDay = Dictionary(grouping: ledgerEvents.filter { $0.date >= windowStart }) {
+        let eventsByDay = Dictionary(grouping: ledgerEvents.filter { $0.date >= cutoff }) {
             calendar.startOfDay(for: $0.date)
         }.mapValues { $0.reduce(0) { $0 + $1.seconds } }
 
-        let videoCountByDay = Dictionary(grouping: watchSegments.filter { $0.date >= windowStart }) {
+        let videoCountByDay = Dictionary(grouping: watchSegments.filter { $0.date >= cutoff }) {
             calendar.startOfDay(for: $0.date)
         }.mapValues { Set($0.compactMap(\.videoURL)).count }
 
@@ -117,7 +120,7 @@ final class EnergyLedgerManager: ObservableObject {
                 return start < end ? (hour >= start && hour < end) : (hour >= start || hour < end)
             }
             lateNightByDay = Dictionary(grouping: watchSegments.filter {
-                $0.date >= windowStart && isLateNightHour(calendar.component(.hour, from: $0.date))
+                $0.date >= cutoff && isLateNightHour(calendar.component(.hour, from: $0.date))
             }) {
                 calendar.startOfDay(for: $0.date)
             }.mapValues { $0.reduce(0) { $0 + $1.durationSeconds } }
@@ -137,7 +140,7 @@ final class EnergyLedgerManager: ObservableObject {
         let todayEvents = ledgerEvents.filter { calendar.isDate($0.date, inSameDayAs: today) }
             .map { (note: $0.note, seconds: $0.seconds, source: $0.sourceKind) }
 
-        queryDailySteps(dayStarts: dayStarts, calendar: calendar) { [weak self] stepsByDay in
+        queryDailySteps(dayStarts: dayStarts, cutoff: cutoff, calendar: calendar) { [weak self] stepsByDay in
             guard let self else { return }
             var total = 0
             var nets: [(day: Date, seconds: Int)] = []
@@ -204,7 +207,7 @@ final class EnergyLedgerManager: ObservableObject {
     // internally anyway, and this keeps the completion bookkeeping simple.
     // A day CMPedometer has no data for (commonly anything past its
     // ~7-day retention) just contributes 0, not an error.
-    private func queryDailySteps(dayStarts: [Date], calendar: Calendar, completion: @escaping ([Date: Int]) -> Void) {
+    private func queryDailySteps(dayStarts: [Date], cutoff: Date, calendar: Calendar, completion: @escaping ([Date: Int]) -> Void) {
         guard CMPedometer.isStepCountingAvailable() else {
             completion([:])
             return
@@ -217,7 +220,10 @@ final class EnergyLedgerManager: ObservableObject {
             }
             let dayStart = dayStarts[index]
             let dayEnd = min(calendar.date(byAdding: .day, value: 1, to: dayStart) ?? Date(), Date())
-            pedometer.queryPedometerData(from: dayStart, to: dayEnd) { data, _ in
+            // Clamped to `cutoff` for whichever day contains it (a same-
+            // day "Reset Balance" must exclude steps taken earlier today
+            // too, not just whole days before it).
+            pedometer.queryPedometerData(from: max(dayStart, cutoff), to: dayEnd) { data, _ in
                 Task { @MainActor in
                     result[dayStart] = data?.numberOfSteps.intValue ?? 0
                     step(index + 1)
