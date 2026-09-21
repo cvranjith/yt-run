@@ -63,7 +63,7 @@ struct ContentView: View {
     // Three columns rather than two, paired with `MenuTile`'s `compact`
     // style below — enough tiles fit in view at once for this to read as
     // one dashboard instead of a few oversized cards needing a long
-    // scroll. Reused for the dashboard box's stat tiles too.
+    // scroll.
     private let gridColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible())]
 
     // Which day the dashboard box is showing — defaults to today, moved
@@ -179,10 +179,9 @@ struct ContentView: View {
     }
 
     // One combined card — every number here is implicitly "today" (or
-    // whichever day is selected below), so none of the individual tiles
-    // repeat that in their own label.
+    // whichever day is selected below).
     private var dashboardBox: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
             Text(isSelectedDateToday ? "Today" : selectedDate.formatted(date: .abbreviated, time: .omitted))
                 .font(.subheadline)
                 .fontWeight(.semibold)
@@ -191,31 +190,20 @@ struct ContentView: View {
             // instead of stepping through prev/next arrows.
             DayStrip(selectedDate: $selectedDate)
 
-            LazyVGrid(columns: gridColumns, spacing: 10) {
+            if let stats = energyLedgerManager.stats(for: selectedDate) {
+                QuotaBarChart(
+                    quotaSeconds: settings.dailyLimitMinutes * 60,
+                    spentSeconds: stats.spentSeconds,
+                    earnedSeconds: stats.earnedSeconds
+                )
+
+                netCaption(for: stats)
+
                 if isSelectedDateToday {
-                    statTile(title: "Daily left", value: minutesText(usageTracker.remainingDailySeconds(dailyLimitMinutes: settings.dailyLimitMinutes)), tint: dailyLeftTint)
-                    statTile(title: "Binge left", value: minutesText(usageTracker.bingeRemainingSeconds(bingeLimitMinutes: settings.bingeLimitMinutes)))
+                    bingeBar
                 }
-                if let stats = energyLedgerManager.stats(for: selectedDate) {
-                    navigableStatTile(title: "Earned", value: minutesText(stats.earnedSeconds)) { CreditBreakdownView() }
-                    navigableStatTile(title: "Spent", value: minutesText(stats.spentSeconds)) { UsageBreakdownView() }
-                    statTile(
-                        title: isSelectedDateToday ? (stats.netSeconds < 0 ? "You owe" : "Balance") : "Net",
-                        value: minutesText(abs(isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds)),
-                        tint: (isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds) < 0 ? .red : .green
-                    )
-                    // Always navigable, unlike Earned/Spent above — this
-                    // one works for any day, not just today (see
-                    // `DaySummaryView`), since it just filters real watch
-                    // history rather than reading `EnergyLedgerManager`'s
-                    // today-only published fields.
-                    NavigationLink {
-                        DaySummaryView(date: selectedDate)
-                    } label: {
-                        statTile(title: "Videos", value: "\(stats.videoCount)")
-                    }
-                    .buttonStyle(.plain)
-                }
+
+                footerRow(stats: stats)
             }
         }
         .padding(.vertical, 16)
@@ -234,52 +222,84 @@ struct ContentView: View {
         }
     }
 
-    // Green while still within today's *intended* limit; once past it,
-    // orange if the Energy Ledger balance can still cover it (you're
-    // spending into today's/rolling profit, but not in debt yet) or red
-    // once it can't (over the intended limit AND in debt). Based on raw
-    // watched-today seconds rather than `remainingDailySeconds` (which
-    // already reflects any borrowed/earned extension) — going past the
-    // real target you set is the thing being flagged here, even while a
-    // borrowed extension still shows a positive number.
-    private var dailyLeftTint: Color {
-        guard usageTracker.todayUsedSeconds >= settings.dailyLimitMinutes * 60 else { return .green }
-        return energyLedgerManager.balanceSeconds >= 0 ? .orange : .red
-    }
-
-    private func minutesText(_ seconds: Int) -> String {
-        "\(seconds / 60)m"
-    }
-
-    private func statTile(title: String, value: String, tint: Color = .primary) -> some View {
+    // "Profit"/"Owe" language matches the chart's own segment labels —
+    // this is literally that day's net, just spelled out. For today
+    // specifically, also shows the *rolling* multi-day balance
+    // underneath in smaller text, since that's a genuinely different
+    // number once more than one day is in play (a profit today doesn't
+    // erase debt carried in from yesterday).
+    private func netCaption(for stats: EnergyLedgerDayStats) -> some View {
         VStack(spacing: 2) {
-            Text(value)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(tint)
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Group {
+                if stats.netSeconds >= 0 {
+                    Text("Profit +\(stats.netSeconds / 60)m")
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Owe \(abs(stats.netSeconds) / 60)m")
+                        .foregroundStyle(.red)
+                }
+            }
+            .font(.subheadline)
+            .fontWeight(.semibold)
+
+            if isSelectedDateToday {
+                Text("Rolling balance (last \(settings.ledgerWindowDays)d): \(energyLedgerManager.balanceSeconds >= 0 ? "+" : "")\(energyLedgerManager.balanceSeconds / 60)m")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    // Only "today" drills into a breakdown — those two detail screens
-    // read `EnergyLedgerManager`'s today-only published fields, so a
-    // past day's tile just shows its own numbers without navigating
-    // anywhere.
-    @ViewBuilder
-    private func navigableStatTile<Destination: View>(title: String, value: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
-        if isSelectedDateToday {
-            NavigationLink(destination: destination) {
-                statTile(title: title, value: value)
+    private var bingeBar: some View {
+        let limitSeconds = settings.bingeLimitMinutes * 60
+        let remaining = usageTracker.bingeRemainingSeconds(bingeLimitMinutes: settings.bingeLimitMinutes)
+        let used = max(0, limitSeconds - remaining)
+        let fraction = limitSeconds > 0 ? min(1, Double(used) / Double(limitSeconds)) : 0
+        let isCritical = UsageTracker.isCritical(remainingSeconds: remaining, limitSeconds: limitSeconds)
+        let barColor: Color = usageTracker.isInCooldown ? .red : (isCritical ? .orange : .blue)
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Binge")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(usageTracker.isInCooldown ? "Cooldown" : "\(remaining / 60)m left")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
-        } else {
-            statTile(title: title, value: value)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.secondary.opacity(0.12))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(barColor)
+                        .frame(width: geo.size.width * fraction)
+                }
+            }
+            .frame(height: 8)
         }
+    }
+
+    // Videos always drills in (works for any day — see `DaySummaryView`);
+    // Earned/Spent only do for today, since those two detail screens
+    // read `EnergyLedgerManager`'s today-only published fields.
+    private func footerRow(stats: EnergyLedgerDayStats) -> some View {
+        HStack {
+            if isSelectedDateToday {
+                NavigationLink("View earnings") { CreditBreakdownView() }
+                Text("·").foregroundStyle(.secondary)
+                NavigationLink("View spending") { UsageBreakdownView() }
+                Spacer()
+            }
+            NavigationLink {
+                DaySummaryView(date: selectedDate)
+            } label: {
+                Label("\(stats.videoCount) videos", systemImage: "play.rectangle")
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: .infinity, alignment: isSelectedDateToday ? .leading : .trailing)
     }
 }
 
