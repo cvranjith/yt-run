@@ -1023,6 +1023,11 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         var controlsVisible = false;
         var hideTimer = null;
         var controls = null;
+        var keepAttr = 'data-ytrun-keep';
+        // Elements we hid on entry, so exit can put them back exactly as
+        // they were rather than just clearing `display` outright (some
+        // of YouTube's own elements set their own inline `display`).
+        var hiddenSiblings = [];
 
         function ensureStyle() {
             if (document.getElementById(styleId)) { return; }
@@ -1060,9 +1065,50 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             if (document.getElementById(overlayId)) { return; }
             var overlay = document.createElement('div');
             overlay.id = overlayId;
+            overlay.setAttribute(keepAttr, 'true');
             controls = window.__ytrunPlayerControls.buildTransportControls({ onExit: exitFakeFullscreen, showQuality: true });
             overlay.appendChild(controls.row);
             (document.body || document.documentElement).appendChild(overlay);
+        }
+
+        // Making the player cover the screen via position:fixed + a high
+        // z-index (see `ensureStyle`) only *visually* stacks it above
+        // everything else — it doesn't stop YouTube's own header/search/
+        // filter-chip chrome from existing underneath, and if any
+        // ancestor of the player happens to have a CSS transform applied
+        // (YouTube does this during some player states), `position:fixed`
+        // stops being relative to the true viewport at all, letting that
+        // chrome show through. Actually hiding every sibling at every
+        // level from the player up to <body> sidesteps both problems:
+        // there's nothing left behind to show through, regardless of any
+        // stacking/positioning quirk. `keepAttr` protects our own
+        // overlay/tap-catcher (persistent across repeated enter/exit
+        // cycles, so they can already exist as body-level siblings by
+        // the time this runs) from being hidden by their own sibling pass.
+        function hideSiblingsUpTree(target) {
+            var node = target;
+            while (node && node !== document.body && node.parentElement) {
+                var parent = node.parentElement;
+                for (var i = 0; i < parent.children.length; i++) {
+                    var sibling = parent.children[i];
+                    if (sibling === node || sibling.hasAttribute(keepAttr)) { continue; }
+                    hiddenSiblings.push({ el: sibling, prevDisplay: sibling.style.display });
+                    sibling.style.setProperty('display', 'none', 'important');
+                }
+                node = parent;
+            }
+        }
+
+        function restoreHiddenSiblings() {
+            for (var i = 0; i < hiddenSiblings.length; i++) {
+                var entry = hiddenSiblings[i];
+                if (entry.prevDisplay) {
+                    entry.el.style.display = entry.prevDisplay;
+                } else {
+                    entry.el.style.removeProperty('display');
+                }
+            }
+            hiddenSiblings = [];
         }
 
         function showControls() {
@@ -1107,6 +1153,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             if (document.getElementById(catcherId)) { return; }
             var catcher = document.createElement('div');
             catcher.id = catcherId;
+            catcher.setAttribute(keepAttr, 'true');
 
             catcher.addEventListener('click', function () {
                 if (controlsVisible) { hideControls(); } else { showControls(); }
@@ -1146,8 +1193,13 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
             ensureStyle();
             var container = findContainer();
             if (!container) { return false; }
+            // Defensive: if a previous exit somehow didn't clean up (e.g.
+            // a forced Swift-side exit racing this), don't stack a second
+            // hide pass on top of the first — restore first, then redo.
+            if (hiddenSiblings.length) { restoreHiddenSiblings(); }
             ensureOverlay();
             ensureTapCatcher();
+            hideSiblingsUpTree(container);
             document.getElementById(catcherId).classList.add('ytrun-on');
             container.classList.add(fakeFullscreenClass);
             fakeFullscreenActive = true;
@@ -1159,6 +1211,7 @@ final class YouTubeWebViewStore: NSObject, ObservableObject {
         function exitFakeFullscreen() {
             var container = document.querySelector('.' + fakeFullscreenClass);
             if (container) { container.classList.remove(fakeFullscreenClass); }
+            restoreHiddenSiblings();
             var catcher = document.getElementById(catcherId);
             if (catcher) { catcher.classList.remove('ytrun-on'); }
             hideControls();
