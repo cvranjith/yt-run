@@ -93,28 +93,33 @@ final class CloudSyncService: ObservableObject {
 
     // MARK: - Title resolution
 
-    // Fills in `videoTitle` for any segment missing it, via YouTube's
-    // public oEmbed endpoint (no API key, no quota — works for any public
-    // video URL). Resolves each unique URL once and applies it to every
-    // segment sharing that URL. Failures are silent per-video — a title
-    // just stays nil, it doesn't fail the whole sync.
+    // Fills in `videoTitle`/`channelName` for any segment missing either,
+    // via YouTube's public oEmbed endpoint (no API key, no quota — works
+    // for any public video URL). A missing `channelName` is usually the
+    // live in-page DOM scrape (see `YouTubeWebViewStore`'s `pageInfoJS`)
+    // never catching up during a short visit — this is the same
+    // deterministic fallback `YouTubeView` now also uses live, just
+    // catching anything recorded before that existed. Resolves each
+    // unique URL once and applies it to every segment sharing that URL.
+    // Failures are silent per-video — a field just stays nil, it doesn't
+    // fail the whole sync.
     private func resolveMissingTitles(in segments: [WatchSegment]) async {
-        let missing = segments.filter { $0.videoTitle == nil && $0.videoURL != nil }
+        let missing = segments.filter { ($0.videoTitle == nil || $0.channelName == nil) && $0.videoURL != nil }
         let uniqueURLs = Set(missing.compactMap(\.videoURL))
         guard !uniqueURLs.isEmpty else { return }
 
-        var resolved: [String: String] = [:]
+        var resolved: [String: YouTubeOEmbedInfo] = [:]
         for urlString in uniqueURLs {
-            if let title = await YouTubeOEmbed.fetchTitle(for: urlString) {
-                resolved[urlString] = title
+            if let info = await YouTubeOEmbed.fetchInfo(for: urlString) {
+                resolved[urlString] = info
             }
         }
         guard !resolved.isEmpty else { return }
 
         for segment in missing {
-            if let url = segment.videoURL, let title = resolved[url] {
-                segment.videoTitle = title
-            }
+            guard let url = segment.videoURL, let info = resolved[url] else { continue }
+            if segment.videoTitle == nil { segment.videoTitle = info.title }
+            if segment.channelName == nil { segment.channelName = info.authorName }
         }
     }
 

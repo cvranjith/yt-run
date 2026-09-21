@@ -83,6 +83,17 @@ struct YouTubeView: View {
     // keeps the badge genuinely subtle (nothing shown, not a spinner).
     @State private var currentVideoCategory: String?
     @State private var categoryLookupChannelName: String?
+    // The channel name actually used for recording (`historyRecorder
+    // .tick`) and category classification — whichever resolves first
+    // between the live in-page DOM scrape (`webViewStore
+    // .currentChannelName`, fast when it works) and YouTube's oEmbed
+    // endpoint (a deterministic fallback that doesn't depend on the
+    // page having rendered the channel element yet — see
+    // `resolveEffectiveChannelName`). A short visit that never got a
+    // DOM-scraped channel name still gets recorded/classified
+    // correctly this way.
+    @State private var effectiveChannelName: String?
+    @State private var effectiveChannelNameVideoID: String?
     // Set only when a classification was freshly made (not a cache hit)
     // — the moment worth a "Categorized as…" toast, since a cache hit
     // should stay completely silent.
@@ -165,7 +176,7 @@ struct YouTubeView: View {
                             isBackground: isBackground,
                             isCarAudio: false,
                             isShorts: webViewStore.currentURL?.path.contains("/shorts/") ?? false,
-                            channelName: webViewStore.currentChannelName,
+                            channelName: effectiveChannelName,
                             videoURL: webViewStore.currentURL?.absoluteString,
                             modelContext: modelContext
                         )
@@ -276,11 +287,18 @@ struct YouTubeView: View {
             // safe to fire alongside the one in `ContentView.onAppear`.
             Task { await cloudSync.sync(modelContext: modelContext) }
             updateCaptionsAvailability(for: webViewStore.currentURL)
+            resolveEffectiveChannelName(for: webViewStore.currentURL)
         }
         .onChange(of: webViewStore.currentURL) { _, newURL in
             updateCaptionsAvailability(for: newURL)
+            resolveEffectiveChannelName(for: newURL)
         }
         .onChange(of: webViewStore.currentChannelName) { _, newChannelName in
+            // The live DOM scrape resolving is the fast path when it
+            // works — only take it if oEmbed (kicked off by the URL
+            // change above) hasn't already won for this video.
+            guard let newChannelName, !newChannelName.isEmpty, effectiveChannelName == nil else { return }
+            effectiveChannelName = newChannelName
             updateVideoCategory(for: newChannelName)
         }
         .alert("New Category", isPresented: $isShowingNewCategoryAlert) {
@@ -733,6 +751,28 @@ struct YouTubeView: View {
             // whatever the more recent one already decided.
             if DownloadManager.videoID(from: webViewStore.currentURL) == videoID {
                 captionsAvailable = available
+            }
+        }
+    }
+
+    // See `effectiveChannelName`'s own comment — this is the deterministic
+    // half of the race. Fired on every video change; whichever of this or
+    // the live-scrape `.onChange` above resolves first sets
+    // `effectiveChannelName` and drives `updateVideoCategory`.
+    private func resolveEffectiveChannelName(for url: URL?) {
+        let videoID = DownloadManager.videoID(from: url)
+        effectiveChannelName = nil
+        effectiveChannelNameVideoID = videoID
+        guard let videoID, let urlString = url?.absoluteString else { return }
+        Task {
+            guard let info = await YouTubeOEmbed.fetchInfo(for: urlString) else { return }
+            // Only apply if still on the same video — a quick nav away
+            // and back shouldn't let a slower, now-stale lookup clobber
+            // whatever the live scrape (or a newer lookup) already set.
+            guard effectiveChannelNameVideoID == videoID else { return }
+            if effectiveChannelName == nil, let authorName = info.authorName, !authorName.isEmpty {
+                effectiveChannelName = authorName
+                updateVideoCategory(for: authorName)
             }
         }
     }

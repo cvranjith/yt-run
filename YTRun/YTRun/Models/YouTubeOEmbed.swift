@@ -5,11 +5,23 @@
 
 import Foundation
 
-// YouTube's public oEmbed endpoint — no API key, no quota, works for any
-// public video URL. Shared by CloudSyncService (resolving titles before a
-// cloud push) and Daily History (resolving titles for on-screen display).
+// One video's title/channel, as YouTube's public oEmbed endpoint
+// reports them — no API key, no quota, works for any public video URL.
+struct YouTubeOEmbedInfo {
+    let title: String?
+    let authorName: String?
+}
+
+// Shared by CloudSyncService and DailyDetailView (resolving missing
+// title/channel for on-screen display and before a cloud push) and
+// YouTubeView (resolving the current video's channel for category
+// classification and recording, when the in-page DOM scrape — see
+// `YouTubeWebViewStore`'s `pageInfoJS` — hasn't produced one yet, or
+// never does for a short visit). Deterministic where the live scrape
+// isn't: it's a server-side lookup keyed by URL, not dependent on the
+// page having actually rendered the channel element in time.
 enum YouTubeOEmbed {
-    static func fetchTitle(for videoURLString: String) async -> String? {
+    static func fetchInfo(for videoURLString: String) async -> YouTubeOEmbedInfo? {
         guard
             var components = URLComponents(string: "https://www.youtube.com/oembed"),
             !videoURLString.isEmpty
@@ -30,10 +42,17 @@ enum YouTubeOEmbed {
             let decoded = try? JSONDecoder().decode(OEmbedResponse.self, from: data)
         else { return nil }
 
-        return decoded.title
+        return YouTubeOEmbedInfo(title: decoded.title, authorName: decoded.author_name)
+    }
+
+    // Thin convenience for the couple of call sites that only ever
+    // wanted the title.
+    static func fetchTitle(for videoURLString: String) async -> String? {
+        await fetchInfo(for: videoURLString)?.title
     }
 
     private struct OEmbedResponse: Decodable {
-        let title: String
+        let title: String?
+        let author_name: String?
     }
 }

@@ -264,20 +264,24 @@ struct DailyDetailView: View {
         return remaining == 0 ? "\(minutes) min" : "\(minutes)m \(remaining)s"
     }
 
-    // Resolves titles for any of this day's videos that don't have one
-    // cached yet, via YouTube's public oEmbed endpoint (no key/quota).
-    // Mutating `videoTitle` directly on the segment updates the UI
-    // immediately — SwiftData's @Model is Observable, so reading the
-    // property in `body` already created the dependency.
+    // Resolves title/channel for any of this day's videos missing either,
+    // via YouTube's public oEmbed endpoint (no key/quota) — a missing
+    // channel is usually the live in-page DOM scrape never catching up
+    // during a short visit (see `YouTubeView`'s own live fallback for
+    // new recordings; this catches anything recorded before that ran).
+    // Mutating the segment directly updates the UI immediately —
+    // SwiftData's @Model is Observable, so reading the property in
+    // `body` already created the dependency.
     private func resolveMissingTitles() async {
-        let missing = segments.filter { $0.videoTitle == nil && $0.videoURL != nil }
+        let missing = segments.filter { ($0.videoTitle == nil || $0.channelName == nil) && $0.videoURL != nil }
         let uniqueURLs = Set(missing.compactMap(\.videoURL))
         guard !uniqueURLs.isEmpty else { return }
 
         for urlString in uniqueURLs {
-            guard let title = await YouTubeOEmbed.fetchTitle(for: urlString) else { continue }
+            guard let info = await YouTubeOEmbed.fetchInfo(for: urlString) else { continue }
             for segment in missing where segment.videoURL == urlString {
-                segment.videoTitle = title
+                if segment.videoTitle == nil { segment.videoTitle = info.title }
+                if segment.channelName == nil { segment.channelName = info.authorName }
             }
         }
         try? modelContext.save()
