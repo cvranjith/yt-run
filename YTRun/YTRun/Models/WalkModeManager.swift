@@ -108,12 +108,18 @@ final class WalkModeManager: ObservableObject {
         }
     }
 
-    func stop() {
+    // Returns how many steps this session reported, so a caller can bank
+    // that count elsewhere (see `EnergyLedgerManager`/`LedgerEvent`) before
+    // it's overwritten by the next `start()`.
+    @discardableResult
+    func stop() -> Int {
+        let steps = lastKnownStepCount
         isActive = false
         pedometer.stopUpdates()
         activityManager.stopActivityUpdates()
         watchdogTimer?.invalidate()
         watchdogTimer = nil
+        return steps
     }
 
     private func checkStillness() {

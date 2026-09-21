@@ -5,6 +5,7 @@
 
 import SwiftUI
 import Combine
+import SwiftData
 
 struct LockedView: View {
     // `@EnvironmentObject` reads a shared instance placed into the
@@ -14,12 +15,14 @@ struct LockedView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var walkModeManager: WalkModeManager
+    @EnvironmentObject var energyLedgerManager: EnergyLedgerManager
     // The YouTube screen hides the native back button throughout (see
     // `YouTubeView`'s own custom Home button), and this view replaces
     // that screen's content entirely while locked — so without this,
     // being locked leaves no way back to Home/Settings at all except
     // force-quitting the app.
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         VStack(spacing: 20) {
@@ -33,6 +36,10 @@ struct LockedView: View {
                 Text("You've used today's YouTube allowance.")
                     .font(.headline)
                     .multilineTextAlignment(.center)
+            }
+
+            if settings.enableEnergyLedger {
+                energyBalanceLabel
             }
 
             // A run either ends an active cooldown early, or tops up the
@@ -83,6 +90,21 @@ struct LockedView: View {
                 .buttonStyle(.bordered)
             }
 
+            // Deliberately no cap and no cooldown-state check of its own —
+            // it just calls the same grant/clear-cooldown mechanism every
+            // other reward uses, without a matching `LedgerEvent` earn.
+            // That gap is the entire mechanism: once this unlocks more
+            // watching, that watch time still lands in `WatchSegment` like
+            // any other, so it shows up as a deficit in the balance above
+            // until real exercise offsets it — see `EnergyLedgerManager`.
+            if settings.enableEnergyLedger {
+                Button("Use Credit (+\(settings.secondsPerCreditUse / 60) min)") {
+                    _ = usageTracker.completeExerciseReward(seconds: settings.secondsPerCreditUse)
+                    energyLedgerManager.refresh(modelContext: modelContext, settings: settings, force: true)
+                }
+                .buttonStyle(.bordered)
+            }
+
             // Hidden unless explicitly turned on in Settings — this
             // bypasses the actual run (no GPS/distance/duration check at
             // all), which defeats the entire point of the app if it's
@@ -113,11 +135,19 @@ struct LockedView: View {
         // over.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             usageTracker.refreshBingeState(bingeResetAfterMinutes: settings.bingeResetAfterMinutes)
+            energyLedgerManager.refresh(modelContext: modelContext, settings: settings)
         }
     }
 
     private var simulateRunLabel: String {
         usageTracker.isInCooldown ? "Simulate Run (ends cooldown)" : "Simulate Run (+\(settings.minutesPerRun) min)"
+    }
+
+    private var energyBalanceLabel: some View {
+        let minutes = energyLedgerManager.balanceSeconds / 60
+        return Text("Energy balance: \(minutes >= 0 ? "+" : "")\(minutes) min")
+            .font(.subheadline)
+            .foregroundStyle(minutes >= 0 ? Color.green : Color.red)
     }
 
     @ViewBuilder
@@ -143,4 +173,5 @@ struct LockedView: View {
         .environmentObject(AppSettings())
         .environmentObject(UsageTracker())
         .environmentObject(WalkModeManager())
+        .environmentObject(EnergyLedgerManager())
 }

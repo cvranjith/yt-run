@@ -5,6 +5,7 @@
 
 import SwiftUI
 import AVFoundation
+import SwiftData
 
 // Counts reps of one `ExerciseKind` on-device via Vision body-pose
 // tracking and, in sets of `settings.repsPerExerciseSet`, lets you
@@ -19,6 +20,7 @@ struct ExerciseTrainingView: View {
 
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var counter: ExerciseCounter
 
     init(kind: ExerciseKind) {
@@ -167,6 +169,9 @@ struct ExerciseTrainingView: View {
             rewardMessage = "+\(seconds) seconds added to today's allowance!"
         case .clearedCooldown:
             rewardMessage = "Cooldown cleared — no extra time needed right now."
+        }
+        if settings.enableEnergyLedger {
+            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * repsPerSet) \(kind.displayName.lowercased())"))
         }
     }
 

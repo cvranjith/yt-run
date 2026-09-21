@@ -169,6 +169,9 @@ struct RunView: View {
         let finishedAt = Date()
 
         let outcome = qualifies ? usageTracker.completeRun(minutes: settings.minutesPerRun) : nil
+        if qualifies, settings.enableEnergyLedger {
+            modelContext.insert(LedgerEvent(date: finishedAt, seconds: settings.minutesPerRun * 60, note: "\(String(format: "%.2f km", distanceKm)) run"))
+        }
 
         pendingRun = PendingRun(
             finishedAt: finishedAt,

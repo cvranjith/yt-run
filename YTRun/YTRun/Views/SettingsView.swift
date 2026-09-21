@@ -173,6 +173,46 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Show Energy Balance", isOn: $settings.enableEnergyLedger)
+                if settings.enableEnergyLedger {
+                    Stepper(value: $settings.ledgerWindowDays, in: 1...30) {
+                        HStack {
+                            Text("Rolling window")
+                            Spacer()
+                            Text("\(settings.ledgerWindowDays) days")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.stepsPerCreditSet, in: 1000...30000, step: 500) {
+                        HStack {
+                            Text("Steps")
+                            Spacer()
+                            Text("\(settings.stepsPerCreditSet)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.secondsPerStepCredit, in: 300...7200, step: 300) {
+                        HStack {
+                            Text("Worth")
+                            Spacer()
+                            Text("\(settings.secondsPerStepCredit / 60) min")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.secondsPerCreditUse, in: 60...3600, step: 60) {
+                        HStack {
+                            Text("\"Use Credit\" grants")
+                            Spacer()
+                            Text("\(settings.secondsPerCreditUse / 60) min")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                sectionHeader("Energy Ledger", info: "A separate, honesty-based balance — not another hard limit. Tracks steps (read passively from your phone's own step history, minus whatever a live Walk session already used) and claimed exercise/run credit against actual watch time, over the rolling window below. Shown on the Locked screen along with a \"Use Credit\" button that grants extra time without exercising first, pushing the balance into deficit with no ceiling — paying it back later is entirely up to you.")
+            }
+
+            Section {
                 TextField("https://your-router.workers.dev", text: $settings.aiGatewayURI)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()

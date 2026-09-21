@@ -52,6 +52,11 @@ final class AppSettings: ObservableObject {
         static let geminiModel = "geminiModel"
         static let claudeAPIKey = "claudeAPIKey"
         static let claudeModel = "claudeModel"
+        static let enableEnergyLedger = "enableEnergyLedger"
+        static let ledgerWindowDays = "ledgerWindowDays"
+        static let stepsPerCreditSet = "stepsPerCreditSet"
+        static let secondsPerStepCredit = "secondsPerStepCredit"
+        static let secondsPerCreditUse = "secondsPerCreditUse"
     }
 
     private enum Defaults {
@@ -89,6 +94,10 @@ final class AppSettings: ObservableObject {
         static let openAICompatibleModel = "gpt-4o-mini"
         static let geminiModel = "gemini-2.0-flash"
         static let claudeModel = "claude-haiku-4-5-20251001"
+        static let ledgerWindowDays = 7
+        static let stepsPerCreditSet = 10000
+        static let secondsPerStepCredit = 3600
+        static let secondsPerCreditUse = 900
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -324,6 +333,50 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(claudeModel, forKey: Keys.claudeModel) }
     }
 
+    // Off by default. A separate, parallel mechanic on top of the hard
+    // daily/binge gates above — not a replacement for them. While on, a
+    // rolling honesty ledger (see `EnergyLedgerManager`) tracks earned
+    // credit (steps, read passively via CMPedometer, plus whatever's
+    // explicitly claimed via push-ups/sit-ups/lunges/stairs/runs) against
+    // actual watch time, over `ledgerWindowDays`. It never blocks
+    // anything by itself — it only powers the LockedView balance readout
+    // and the "Use Credit" button, which can push the ledger negative
+    // with no ceiling (a deliberate "pay later" honesty account, not a
+    // second hard limit).
+    @Published var enableEnergyLedger: Bool {
+        didSet { UserDefaults.standard.set(enableEnergyLedger, forKey: Keys.enableEnergyLedger) }
+    }
+
+    // How many trailing days feed the rolling balance — old surplus/debt
+    // ages out after this many days rather than accumulating forever.
+    // Note: CMPedometer typically only retains ~7 days of step history on
+    // device, so a window much longer than that will just read 0 step
+    // credit for the older days in it.
+    @Published var ledgerWindowDays: Int {
+        didSet { UserDefaults.standard.set(ledgerWindowDays, forKey: Keys.ledgerWindowDays) }
+    }
+
+    // "10,000 steps = 60 minutes" as two numbers rather than one derived
+    // rate, so the Settings UI can show it exactly the way it's usually
+    // thought about. Applied proportionally (not floored to whole sets
+    // the way reps are) since steps accrue continuously in the
+    // background rather than through a discrete claim action.
+    @Published var stepsPerCreditSet: Int {
+        didSet { UserDefaults.standard.set(stepsPerCreditSet, forKey: Keys.stepsPerCreditSet) }
+    }
+
+    @Published var secondsPerStepCredit: Int {
+        didSet { UserDefaults.standard.set(secondsPerStepCredit, forKey: Keys.secondsPerStepCredit) }
+    }
+
+    // How much extra time one tap of "Use Credit" on the Locked screen
+    // grants — a fixed chunk, not "unlock everything at once." Debits the
+    // ledger by the same amount with no floor, since paying it back later
+    // is left entirely up to you (see `enableEnergyLedger`).
+    @Published var secondsPerCreditUse: Int {
+        didSet { UserDefaults.standard.set(secondsPerCreditUse, forKey: Keys.secondsPerCreditUse) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -387,5 +440,14 @@ final class AppSettings: ObservableObject {
         self.geminiModel = defaults.string(forKey: Keys.geminiModel) ?? Defaults.geminiModel
         self.claudeAPIKey = defaults.string(forKey: Keys.claudeAPIKey) ?? ""
         self.claudeModel = defaults.string(forKey: Keys.claudeModel) ?? Defaults.claudeModel
+        self.enableEnergyLedger = defaults.bool(forKey: Keys.enableEnergyLedger)
+        self.ledgerWindowDays = defaults.object(forKey: Keys.ledgerWindowDays) as? Int
+            ?? Defaults.ledgerWindowDays
+        self.stepsPerCreditSet = defaults.object(forKey: Keys.stepsPerCreditSet) as? Int
+            ?? Defaults.stepsPerCreditSet
+        self.secondsPerStepCredit = defaults.object(forKey: Keys.secondsPerStepCredit) as? Int
+            ?? Defaults.secondsPerStepCredit
+        self.secondsPerCreditUse = defaults.object(forKey: Keys.secondsPerCreditUse) as? Int
+            ?? Defaults.secondsPerCreditUse
     }
 }

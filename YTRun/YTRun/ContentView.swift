@@ -54,6 +54,9 @@ struct ContentView: View {
     // session survives navigating away from and back to the YouTube
     // screen, rather than resetting every time that screen appears.
     @StateObject private var walkModeManager = WalkModeManager()
+    // Owned here for the same reason as `usageTracker` — a single shared
+    // instance whose `balanceSeconds` LockedView and Settings both read.
+    @StateObject private var energyLedgerManager = EnergyLedgerManager()
 
     @Environment(\.modelContext) private var modelContext
 
@@ -116,6 +119,7 @@ struct ContentView: View {
         .environmentObject(aiGatewayClient)
         .environmentObject(chatGPTBridge)
         .environmentObject(walkModeManager)
+        .environmentObject(energyLedgerManager)
         .onOpenURL { url in
             chatGPTBridge.handle(url: url)
         }

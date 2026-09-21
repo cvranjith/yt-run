@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 // Counts flights of stairs climbed (see StairClimbCounter) and, every
 // `settings.floorsPerStairSet`, lets you claim `settings.secondsPerStairSet`
@@ -13,6 +14,7 @@ import SwiftUI
 struct StairClimbView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var usageTracker: UsageTracker
+    @Environment(\.modelContext) private var modelContext
     @StateObject private var counter = StairClimbCounter()
 
     // Floors already "spent" on a claimed reward — same reasoning as
@@ -91,6 +93,9 @@ struct StairClimbView: View {
             rewardMessage = "+\(seconds) seconds added to today's allowance!"
         case .clearedCooldown:
             rewardMessage = "Cooldown cleared — no extra time needed right now."
+        }
+        if settings.enableEnergyLedger {
+            modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * floorsPerSet) floors climbed"))
         }
     }
 

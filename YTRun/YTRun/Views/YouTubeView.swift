@@ -509,7 +509,14 @@ struct YouTubeView: View {
                 .font(.caption)
             Spacer()
             Button("End Walk") {
-                walkModeManager.stop()
+                let steps = walkModeManager.stop()
+                // These steps already bought live playback for this
+                // session — record a matching deduction so they can't
+                // also inflate the passive daily step credit below.
+                if settings.enableEnergyLedger, steps > 0 {
+                    let seconds = Int((Double(steps) / Double(max(1, settings.stepsPerCreditSet))) * Double(settings.secondsPerStepCredit))
+                    modelContext.insert(LedgerEvent(date: .now, seconds: -seconds, note: "Walk mode (\(steps) steps, already used live)"))
+                }
             }
             .font(.caption)
         }
