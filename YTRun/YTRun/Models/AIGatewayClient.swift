@@ -402,18 +402,21 @@ final class AIGatewayClient: ObservableObject {
     }
 
     // One-word video-category classification, for the per-channel
-    // category cache (see `ChannelCategoryResolver`). Reuses the same
-    // three direct-provider adapters `summarizeViaDirectProvider` calls —
-    // they're already just "send instructions + arbitrary text, get text
-    // back," nothing summarization-specific about them. Deliberately
-    // never routed through `ytRunGateway` (that's a server-side Codex
-    // service with no generic classify endpoint) or a new YouTube Data
-    // API key (unused anywhere else in this app) — just whichever
-    // already-configured direct provider is available, preferring the
-    // one Summarize itself defaults to. Returns nil (not "Other") when no
-    // provider is configured at all, so a guess is never cached that was
-    // never actually made — it's retried once a key exists.
+    // category cache (see `ChannelCategoryResolver`). Tries YTRun
+    // Gateway first — a "youtube_classify" service on ai-gateway calls
+    // Codex CLI the same way youtube_summarizer does, no transcript
+    // needed, so this costs nothing beyond what's already running for
+    // Summarize/Downloads — falling back to whichever direct provider
+    // (Gemini/Claude/OpenAI-compatible) is configured, if any, only if
+    // the gateway isn't set up or the call fails. Returns nil (not
+    // "Other") when nothing is available at all, so a guess is never
+    // cached that was never actually made — it's retried once something
+    // is configured.
     func classifyChannelCategory(channelName: String, videoTitle: String?, knownCategories: [String], settings: AppSettings) async -> String? {
+        if let category = await classifyViaGateway(channelName: channelName, videoTitle: videoTitle, knownCategories: knownCategories, settings: settings) {
+            return category
+        }
+
         guard let provider = Self.availableDirectProvider(settings: settings) else { return nil }
 
         let instructions = "You are tagging YouTube videos with a single short topic category, "
@@ -436,6 +439,32 @@ final class AIGatewayClient: ObservableObject {
 
         guard case .success(let raw) = result else { return nil }
         let category = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return category.isEmpty ? nil : category
+    }
+
+    private func classifyViaGateway(channelName: String, videoTitle: String?, knownCategories: [String], settings: AppSettings) async -> String? {
+        guard let baseURL = Self.baseURL(from: settings) else { return nil }
+        let token = settings.aiGatewayToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return nil }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/invoke"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "service": "local.classify",
+            "input": channelName,
+            "options": ["title": videoTitle ?? "", "known_categories": knownCategories],
+        ])
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let output = json["output"] as? String else {
+            return nil
+        }
+        let category = output.trimmingCharacters(in: .whitespacesAndNewlines)
         return category.isEmpty ? nil : category
     }
 
