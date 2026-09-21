@@ -14,6 +14,7 @@ import SwiftData
 // idioms `DailyDetailView` already uses (filter+reduce for the hour
 // totals, dictionary-accumulate-then-sort for the category split).
 struct UsageBreakdownView: View {
+    @EnvironmentObject var energyLedgerManager: EnergyLedgerManager
     @Query(sort: \WatchSegment.date) private var allSegments: [WatchSegment]
     @Query private var categories: [ChannelCategory]
 
@@ -84,12 +85,32 @@ struct UsageBreakdownView: View {
                 Text("Categories are guessed automatically per channel the first time it's watched — tap the badge while watching to correct one.")
             }
 
+            if energyLedgerManager.todayLateNightPenaltySeconds < 0 {
+                Section {
+                    HStack {
+                        Text("Late-night penalty")
+                        Spacer()
+                        Text("\(energyLedgerManager.todayLateNightPenaltySeconds / 60) min")
+                            .foregroundStyle(.red)
+                    }
+                } footer: {
+                    Text("An extra deduction for watching during the configured late-night hours — on top of the watched time above, not instead of it.")
+                }
+            }
+
             Section {
                 HStack {
                     Text("Total watched today")
                         .fontWeight(.semibold)
                     Spacer()
                     Text("\(totalSeconds / 60) min")
+                        .fontWeight(.semibold)
+                }
+                HStack {
+                    Text("Total spent (incl. penalty)")
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Text("\((totalSeconds - energyLedgerManager.todayLateNightPenaltySeconds) / 60) min")
                         .fontWeight(.semibold)
                 }
             }
@@ -112,5 +133,6 @@ struct UsageBreakdownView: View {
     NavigationStack {
         UsageBreakdownView()
     }
+    .environmentObject(EnergyLedgerManager())
     .modelContainer(for: [WatchSegment.self, ChannelCategory.self], inMemory: true)
 }

@@ -213,6 +213,38 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Enable Late-Night Penalty", isOn: $settings.enableLateNightPenalty)
+                if settings.enableLateNightPenalty {
+                    Stepper(value: $settings.lateNightStartHour, in: 0...23) {
+                        HStack {
+                            Text("Starts at")
+                            Spacer()
+                            Text(hourLabel(settings.lateNightStartHour))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.lateNightEndHour, in: 0...23) {
+                        HStack {
+                            Text("Ends at")
+                            Spacer()
+                            Text(hourLabel(settings.lateNightEndHour))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Stepper(value: $settings.lateNightPenaltySecondsPerMinute, in: 0...180, step: 15) {
+                        HStack {
+                            Text("Penalty rate")
+                            Spacer()
+                            Text("\(settings.lateNightPenaltySecondsPerMinute)s per min watched")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                sectionHeader("Late-Night Penalty", info: "An extra deduction from the Energy Ledger for watching during these hours — on top of that time already counting as normal spend, not instead of it. At the default rate, 10 minutes watched in the window costs an extra 10 minutes off your balance.")
+            }
+
+            Section {
                 TextField("https://your-router.workers.dev", text: $settings.aiGatewayURI)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -331,6 +363,12 @@ struct SettingsView: View {
             Spacer()
             InfoButton(text: info)
         }
+    }
+
+    private func hourLabel(_ hour: Int) -> String {
+        let period = hour < 12 ? "AM" : "PM"
+        let displayHour = hour % 12 == 0 ? 12 : hour % 12
+        return "\(displayHour) \(period)"
     }
 
     // Small reusable row so the three sections stay visually consistent.

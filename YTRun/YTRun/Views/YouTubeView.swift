@@ -102,24 +102,6 @@ struct YouTubeView: View {
             || usageTracker.isInCooldown
     }
 
-    // Drives what the leading control-bar button does: while watching
-    // a specific video, it takes you to YouTube's home feed (matching
-    // what tapping "Home" in YouTube's own app does); anywhere else
-    // (the feed itself, search results, a channel page, ...) it falls
-    // back to leaving this screen entirely, with a different icon so
-    // the two aren't confused.
-    //
-    // Checking for the *absence* of a video ID (the same
-    // `DownloadManager.videoID(from:)` already used to gate
-    // captions/summarize) rather than matching the feed's exact URL
-    // shape — that URL isn't reliably just a bare "/" (redirects, query
-    // params), so path-matching against it was fragile; "not currently
-    // watching a video" is both simpler and matches what this button
-    // should actually do everywhere that isn't a watch page.
-    private var isOnYouTubeHomeFeed: Bool {
-        DownloadManager.videoID(from: webViewStore.currentURL) == nil
-    }
-
     var body: some View {
         Group {
             if isLocked {
@@ -358,22 +340,19 @@ struct YouTubeView: View {
 
     // Replaces the native navigation bar's title/toolbar entirely — see
     // the comment on `.toolbar(.hidden, for: .navigationBar)` above for
-    // why. Home (app navigation, distinct from the web page's own Back
-    // right next to it) / Back / Reload on the left; a "•••" menu for
-    // the less-used web controls, then Listen Mode / Download as
-    // one-tap buttons, on the right.
+    // why. Two fixed destinations rather than one context-sensitive
+    // button (the app's own Dashboard on the left, YouTube's own feed
+    // centered) / Back / Reload; a "•••" menu for the less-used web
+    // controls, then Listen Mode / Download as one-tap buttons, on the
+    // right.
     private var controlBar: some View {
         HStack(spacing: 18) {
             Button {
-                if isOnYouTubeHomeFeed {
-                    dismiss()
-                } else {
-                    webViewStore.forceLoad(Self.homeURL)
-                }
+                dismiss()
             } label: {
-                Image(systemName: isOnYouTubeHomeFeed ? "house.fill" : "house")
+                Image(systemName: "square.grid.2x2")
             }
-            .accessibilityLabel(isOnYouTubeHomeFeed ? "Back to App Home" : "YouTube Home")
+            .accessibilityLabel("Back to App Dashboard")
 
             Button {
                 webViewStore.goBack()
@@ -389,6 +368,15 @@ struct YouTubeView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .accessibilityLabel("Reload — use this if a video gets stuck")
+
+            Spacer()
+
+            Button {
+                webViewStore.forceLoad(Self.homeURL)
+            } label: {
+                Image(systemName: "house")
+            }
+            .accessibilityLabel("YouTube Home")
 
             Spacer()
 

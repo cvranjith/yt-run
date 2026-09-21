@@ -60,7 +60,11 @@ struct ContentView: View {
 
     @Environment(\.modelContext) private var modelContext
 
-    private let gridColumns = [GridItem(.flexible(), spacing: 16), GridItem(.flexible())]
+    // Three columns rather than two, paired with `MenuTile`'s `compact`
+    // style below — enough tiles fit in view at once for this to read as
+    // one dashboard instead of a few oversized cards needing a long
+    // scroll.
+    private let gridColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible())]
 
     // `body` is the only requirement of the `View` protocol.
     // `some View` means "a concrete view type, but I won't tell you which one" —
@@ -82,27 +86,32 @@ struct ContentView: View {
                         balanceSheetCard
                     }
 
-                    LazyVGrid(columns: gridColumns, spacing: 16) {
-                        MenuTile(title: "Watch YouTube", systemImage: "play.rectangle.fill", color: .red) {
+                    LazyVGrid(columns: gridColumns, spacing: 12) {
+                        MenuTile(title: "Watch YouTube", systemImage: "play.rectangle.fill", color: .red, compact: true) {
                             YouTubeView()
                         }
-                        MenuTile(title: "Start a Run", systemImage: "figure.run", color: .orange) {
+                        MenuTile(title: "Start a Run", systemImage: "figure.run", color: .orange, compact: true) {
                             RunView()
                         }
-                        MenuTile(title: "View History", systemImage: "calendar", color: .purple) {
+                        MenuTile(title: "View History", systemImage: "calendar", color: .purple, compact: true) {
                             DailyHistoryView()
                         }
-                        MenuTile(title: "Run History", systemImage: "map.fill", color: .green) {
+                        MenuTile(title: "Run History", systemImage: "map.fill", color: .green, compact: true) {
                             RunHistoryView()
                         }
-                        MenuTile(title: "Downloads", systemImage: "arrow.down.circle.fill", color: .blue) {
+                        MenuTile(title: "Downloads", systemImage: "arrow.down.circle.fill", color: .blue, compact: true) {
                             DownloadsView()
                         }
-                        MenuTile(title: "Update App", systemImage: "arrow.triangle.2.circlepath", color: .indigo) {
+                        MenuTile(title: "Update App", systemImage: "arrow.triangle.2.circlepath", color: .indigo, compact: true) {
                             DeployView()
                         }
-                        MenuTile(title: "Exercises", systemImage: "figure.strengthtraining.traditional", color: .pink) {
+                        MenuTile(title: "Exercises", systemImage: "figure.strengthtraining.traditional", color: .pink, compact: true) {
                             ExercisePickerView()
+                        }
+                        if settings.enableEnergyLedger {
+                            MenuTile(title: "Habits", systemImage: "checklist", color: .teal, compact: true) {
+                                HabitsView()
+                            }
                         }
                     }
 
@@ -254,6 +263,25 @@ struct ContentView: View {
     // parallel, non-blocking ledger, and conflating them would make the
     // "this doesn't replace your hard limits" distinction less obvious.
     private var balanceSheetCard: some View {
+        VStack(spacing: 12) {
+            balanceSheetNumbers
+
+            Divider()
+
+            // Trend first (the "how am I doing lately" question), then
+            // today's mix — matches the order the user asked for these
+            // ("last seven days... then today's spend and activities").
+            BalanceTrendChart()
+
+            TodayCategoryPieChart()
+        }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 12)
+        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
+    }
+
+    private var balanceSheetNumbers: some View {
         HStack(spacing: 0) {
             NavigationLink {
                 CreditBreakdownView()
@@ -267,7 +295,16 @@ struct ContentView: View {
             NavigationLink {
                 UsageBreakdownView()
             } label: {
-                balanceSheetColumn(title: "Spent today", seconds: energyLedgerManager.todaySpentSeconds, tint: .primary)
+                // Watched time plus any late-night penalty (see
+                // `EnergyLedgerManager.todayLateNightPenaltySeconds`,
+                // always ≤ 0) — folded in here rather than left out, so
+                // "Earned − Spent" shown across these two columns always
+                // agrees with the Balance column's today-contribution.
+                balanceSheetColumn(
+                    title: "Spent today",
+                    seconds: energyLedgerManager.todaySpentSeconds - energyLedgerManager.todayLateNightPenaltySeconds,
+                    tint: .primary
+                )
             }
             .buttonStyle(.plain)
 
@@ -280,9 +317,6 @@ struct ContentView: View {
             )
             .frame(maxWidth: .infinity)
         }
-        .padding(.vertical, 18)
-        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
     }
 
     private func balanceSheetColumn(title: String, seconds: Int, tint: Color) -> some View {
@@ -302,5 +336,5 @@ struct ContentView: View {
 // the full app on a simulator/device — handy while iterating on layout.
 #Preview {
     ContentView()
-        .modelContainer(for: [RunRecord.self, WatchSegment.self, LedgerEvent.self, ChannelCategory.self], inMemory: true)
+        .modelContainer(for: [RunRecord.self, WatchSegment.self, LedgerEvent.self, ChannelCategory.self, HabitType.self], inMemory: true)
 }

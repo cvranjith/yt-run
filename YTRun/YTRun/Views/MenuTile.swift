@@ -13,6 +13,12 @@ struct MenuTile<Destination: View>: View {
     let systemImage: String
     let color: Color
     var fullWidth = false
+    // A denser variant for a "dashboard" grid with many tiles on one
+    // screen — same tap target, just a shorter, tighter card so more of
+    // them fit without scrolling. Independent of `fullWidth` (mutually
+    // exclusive in practice, but nothing enforces that — `fullWidth`
+    // wins if both are set, matching the `if/else` below).
+    var compact = false
     @ViewBuilder var destination: () -> Destination
 
     var body: some View {
@@ -36,6 +42,22 @@ struct MenuTile<Destination: View>: View {
                 .padding(.vertical, 14)
                 .frame(maxWidth: .infinity)
                 .background(color.gradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else if compact {
+                VStack(spacing: 6) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 16, weight: .semibold))
+                    Text(title)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 64)
+                .background(color.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     Image(systemName: systemImage)

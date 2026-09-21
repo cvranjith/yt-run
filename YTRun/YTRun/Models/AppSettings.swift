@@ -57,6 +57,10 @@ final class AppSettings: ObservableObject {
         static let stepsPerCreditSet = "stepsPerCreditSet"
         static let secondsPerStepCredit = "secondsPerStepCredit"
         static let secondsPerCreditUse = "secondsPerCreditUse"
+        static let enableLateNightPenalty = "enableLateNightPenalty"
+        static let lateNightStartHour = "lateNightStartHour"
+        static let lateNightEndHour = "lateNightEndHour"
+        static let lateNightPenaltySecondsPerMinute = "lateNightPenaltySecondsPerMinute"
     }
 
     private enum Defaults {
@@ -98,6 +102,9 @@ final class AppSettings: ObservableObject {
         static let stepsPerCreditSet = 10000
         static let secondsPerStepCredit = 3600
         static let secondsPerCreditUse = 900
+        static let lateNightStartHour = 22
+        static let lateNightEndHour = 5
+        static let lateNightPenaltySecondsPerMinute = 60
     }
 
     @Published var dailyLimitMinutes: Int {
@@ -377,6 +384,31 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(secondsPerCreditUse, forKey: Keys.secondsPerCreditUse) }
     }
 
+    // Off by default. An extra deduction from the Energy Ledger (see
+    // `EnergyLedgerManager`) for any watching that falls inside the
+    // configured hours — on top of that time already counting as normal
+    // spend, not instead of it, so it's a real disincentive rather than
+    // just a relabeling. Derived live from `WatchSegment` timestamps each
+    // refresh, the same way step credit is derived live from CMPedometer
+    // — nothing about it is separately logged or stored.
+    @Published var enableLateNightPenalty: Bool {
+        didSet { UserDefaults.standard.set(enableLateNightPenalty, forKey: Keys.enableLateNightPenalty) }
+    }
+
+    // 24-hour clock; `lateNightStartHour > lateNightEndHour` (the default,
+    // 22 and 5) means the window wraps past midnight.
+    @Published var lateNightStartHour: Int {
+        didSet { UserDefaults.standard.set(lateNightStartHour, forKey: Keys.lateNightStartHour) }
+    }
+
+    @Published var lateNightEndHour: Int {
+        didSet { UserDefaults.standard.set(lateNightEndHour, forKey: Keys.lateNightEndHour) }
+    }
+
+    @Published var lateNightPenaltySecondsPerMinute: Int {
+        didSet { UserDefaults.standard.set(lateNightPenaltySecondsPerMinute, forKey: Keys.lateNightPenaltySecondsPerMinute) }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -449,5 +481,12 @@ final class AppSettings: ObservableObject {
             ?? Defaults.secondsPerStepCredit
         self.secondsPerCreditUse = defaults.object(forKey: Keys.secondsPerCreditUse) as? Int
             ?? Defaults.secondsPerCreditUse
+        self.enableLateNightPenalty = defaults.bool(forKey: Keys.enableLateNightPenalty)
+        self.lateNightStartHour = defaults.object(forKey: Keys.lateNightStartHour) as? Int
+            ?? Defaults.lateNightStartHour
+        self.lateNightEndHour = defaults.object(forKey: Keys.lateNightEndHour) as? Int
+            ?? Defaults.lateNightEndHour
+        self.lateNightPenaltySecondsPerMinute = defaults.object(forKey: Keys.lateNightPenaltySecondsPerMinute) as? Int
+            ?? Defaults.lateNightPenaltySecondsPerMinute
     }
 }
