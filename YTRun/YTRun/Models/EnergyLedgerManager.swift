@@ -21,9 +21,25 @@ import SwiftData
 // (`WatchSegment`, `LedgerEvent`, CMPedometer's own daily history) are
 // already the durable record — there's nothing to gain from also
 // caching a running total that could drift out of sync with them.
+// One day's slice of the ledger — everything the Home dashboard needs
+// to show a single day's numbers, whether that's today or a day being
+// browsed via the trend chart's prev/next navigation.
+struct EnergyLedgerDayStats {
+    var earnedSeconds = 0
+    var spentSeconds = 0
+    var netSeconds = 0
+    var stepCount = 0
+    var videoCount = 0
+    var lateNightPenaltySeconds = 0
+}
+
 @MainActor
 final class EnergyLedgerManager: ObservableObject {
     @Published private(set) var balanceSeconds: Int = 0
+    // Every day in the current window, keyed by its `startOfDay` — lets
+    // the Home dashboard show any single day's numbers (today or one
+    // navigated to via the trend chart), not just today's.
+    @Published private(set) var dailyStats: [Date: EnergyLedgerDayStats] = [:]
     // Today's slice of the same computation `refresh` already does for
     // the whole window — captured for free from that same loop rather
     // than a second pass, for the Home screen's balance-sheet card.
@@ -57,7 +73,14 @@ final class EnergyLedgerManager: ObservableObject {
         let calendar = Calendar.current
         let windowDays = max(1, settings.ledgerWindowDays)
         let today = calendar.startOfDay(for: Date())
-        guard let windowStart = calendar.date(byAdding: .day, value: -(windowDays - 1), to: today) else { return }
+        guard var windowStart = calendar.date(byAdding: .day, value: -(windowDays - 1), to: today) else { return }
+        // "Reset Balance" (Settings) sets this to the moment it was
+        // tapped — clamping the window to it is what makes old debt stop
+        // counting, without deleting any real `WatchSegment`/`LedgerEvent`
+        // rows (those still power Daily History/Run History untouched).
+        if let resetDate = settings.ledgerStartDate {
+            windowStart = max(windowStart, calendar.startOfDay(for: resetDate))
+        }
 
         let watchSegments = (try? modelContext.fetch(FetchDescriptor<WatchSegment>())) ?? []
         let ledgerEvents = (try? modelContext.fetch(FetchDescriptor<LedgerEvent>())) ?? []
@@ -69,6 +92,10 @@ final class EnergyLedgerManager: ObservableObject {
         let eventsByDay = Dictionary(grouping: ledgerEvents.filter { $0.date >= windowStart }) {
             calendar.startOfDay(for: $0.date)
         }.mapValues { $0.reduce(0) { $0 + $1.seconds } }
+
+        let videoCountByDay = Dictionary(grouping: watchSegments.filter { $0.date >= windowStart }) {
+            calendar.startOfDay(for: $0.date)
+        }.mapValues { Set($0.compactMap(\.videoURL)).count }
 
         let stepsPerCreditSet = max(1, settings.stepsPerCreditSet)
         let secondsPerStepCredit = settings.secondsPerStepCredit
@@ -110,6 +137,7 @@ final class EnergyLedgerManager: ObservableObject {
             guard let self else { return }
             var total = 0
             var nets: [(day: Date, seconds: Int)] = []
+            var stats: [Date: EnergyLedgerDayStats] = [:]
             for day in dayStarts {
                 let watched = watchedByDay[day] ?? 0
                 let events = eventsByDay[day] ?? 0
@@ -120,6 +148,14 @@ final class EnergyLedgerManager: ObservableObject {
                 let net = stepSeconds + events - watched + penalty
                 total += net
                 nets.append((day: day, seconds: net))
+                stats[day] = EnergyLedgerDayStats(
+                    earnedSeconds: stepSeconds + events,
+                    spentSeconds: watched - penalty,
+                    netSeconds: net,
+                    stepCount: steps,
+                    videoCount: videoCountByDay[day] ?? 0,
+                    lateNightPenaltySeconds: penalty
+                )
                 if day == today {
                     // Matches the same shape as `net` above, just for
                     // today alone — so "Earned − Spent" on the Home card
@@ -136,8 +172,27 @@ final class EnergyLedgerManager: ObservableObject {
             }
             self.todayCreditEvents = todayEvents
             self.dailyNets = nets
+            self.dailyStats = stats
             self.balanceSeconds = total
         }
+    }
+
+    // For a day that's aged out of the current window (older than
+    // `ledgerWindowDays`, or before a "Reset Balance" cutoff) there's
+    // nothing to show — the Home dashboard's day navigation stops there
+    // rather than displaying a misleading zeroed-out day.
+    func stats(for day: Date) -> EnergyLedgerDayStats? {
+        dailyStats[Calendar.current.startOfDay(for: day)]
+    }
+
+    // Non-destructive: sets the window's floor to right now rather than
+    // deleting any `WatchSegment`/`LedgerEvent` row, so Daily History and
+    // Run History (which read those same tables) are completely
+    // unaffected — only this ledger's own rolling balance stops counting
+    // anything from before this moment.
+    func resetBalance(settings: AppSettings, modelContext: ModelContext) {
+        settings.ledgerStartDate = Date()
+        refresh(modelContext: modelContext, settings: settings, force: true)
     }
 
     // One `queryPedometerData` call per day in the window, chained rather

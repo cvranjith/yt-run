@@ -34,22 +34,25 @@ struct BalanceTrendChart: View {
     }
 }
 
-// Today's watch time split by video category (see `ChannelCategory`) —
+// A day's watch time split by video category (see `ChannelCategory`) —
 // same dictionary-accumulate-then-sort shape as `UsageBreakdownView`'s
 // `categoryBreakdown`, kept as its own small copy here rather than a
 // shared abstraction, since a compact Home-screen chart and a full
 // detail list have different enough display needs (colors/legend vs a
 // plain list) that sharing would mean threading display options through
-// one function anyway.
-struct TodayCategoryPieChart: View {
+// one function anyway. Takes an explicit `date` (not always "today") so
+// the Home dashboard's prev/next day navigation can show any day's mix.
+struct CategoryPieChart: View {
+    let date: Date
+
     @Query(sort: \WatchSegment.date) private var allSegments: [WatchSegment]
     @Query private var categories: [ChannelCategory]
 
     private var breakdown: [(category: String, seconds: Int)] {
-        let today = allSegments.filter { Calendar.current.isDateInToday($0.date) }
+        let dayOf = allSegments.filter { Calendar.current.isDate($0.date, inSameDayAs: date) }
         let categoryByChannel = Dictionary(uniqueKeysWithValues: categories.map { ($0.channelName, $0.category) })
         var totals: [String: Int] = [:]
-        for segment in today {
+        for segment in dayOf {
             let category = segment.channelName.flatMap { categoryByChannel[$0] } ?? "Uncategorized"
             totals[category, default: 0] += segment.durationSeconds
         }
@@ -58,7 +61,7 @@ struct TodayCategoryPieChart: View {
 
     var body: some View {
         if breakdown.isEmpty {
-            Text("Nothing watched today yet.")
+            Text("Nothing watched that day.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 100)

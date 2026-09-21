@@ -61,6 +61,7 @@ final class AppSettings: ObservableObject {
         static let lateNightStartHour = "lateNightStartHour"
         static let lateNightEndHour = "lateNightEndHour"
         static let lateNightPenaltySecondsPerMinute = "lateNightPenaltySecondsPerMinute"
+        static let ledgerStartDate = "ledgerStartDate"
     }
 
     private enum Defaults {
@@ -409,6 +410,20 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(lateNightPenaltySecondsPerMinute, forKey: Keys.lateNightPenaltySecondsPerMinute) }
     }
 
+    // Set by "Reset Balance" (Settings' Energy Ledger section) — the
+    // rolling window never looks earlier than this, so old debt/surplus
+    // stops counting without touching any actual `WatchSegment`/
+    // `LedgerEvent` row. `nil` (the default) means no cutoff at all.
+    @Published var ledgerStartDate: Date? {
+        didSet {
+            if let ledgerStartDate {
+                UserDefaults.standard.set(ledgerStartDate, forKey: Keys.ledgerStartDate)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.ledgerStartDate)
+            }
+        }
+    }
+
     // Name of the Shortcut the experimental "Summarize via ChatGPT App"
     // feature invokes (see `ChatGPTShortcutBridge`) — must match exactly
     // what the Shortcut is named in the Shortcuts app.
@@ -488,5 +503,6 @@ final class AppSettings: ObservableObject {
             ?? Defaults.lateNightEndHour
         self.lateNightPenaltySecondsPerMinute = defaults.object(forKey: Keys.lateNightPenaltySecondsPerMinute) as? Int
             ?? Defaults.lateNightPenaltySecondsPerMinute
+        self.ledgerStartDate = defaults.object(forKey: Keys.ledgerStartDate) as? Date
     }
 }

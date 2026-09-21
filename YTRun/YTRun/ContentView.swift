@@ -63,8 +63,18 @@ struct ContentView: View {
     // Three columns rather than two, paired with `MenuTile`'s `compact`
     // style below — enough tiles fit in view at once for this to read as
     // one dashboard instead of a few oversized cards needing a long
-    // scroll.
+    // scroll. Reused for the dashboard box's stat tiles too.
     private let gridColumns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12), GridItem(.flexible())]
+
+    // Which day the dashboard box is showing — defaults to today, moved
+    // by the prev/next arrows in `dateNavigationHeader`. Only relevant
+    // while the Energy Ledger is on; the hard daily/binge tiles always
+    // reflect right now regardless of this.
+    @State private var selectedDate = Calendar.current.startOfDay(for: Date())
+
+    private var isSelectedDateToday: Bool {
+        Calendar.current.isDateInToday(selectedDate)
+    }
 
     // `body` is the only requirement of the `View` protocol.
     // `some View` means "a concrete view type, but I won't tell you which one" —
@@ -75,16 +85,8 @@ struct ContentView: View {
         // navigation controller) and gives us the title bar + back button.
         NavigationStack {
             ScrollView {
-                VStack(spacing: 24) {
-                    header
-                    if let expiryBanner {
-                        expiryBanner
-                    }
-                    statsCard
-
-                    if settings.enableEnergyLedger {
-                        balanceSheetCard
-                    }
+                VStack(spacing: 16) {
+                    dashboardBox
 
                     LazyVGrid(columns: gridColumns, spacing: 12) {
                         MenuTile(title: "Watch YouTube", systemImage: "play.rectangle.fill", color: .red, compact: true) {
@@ -122,6 +124,8 @@ struct ContentView: View {
                 .padding()
             }
             .background(Color(.systemGroupedBackground))
+            .navigationTitle("YTRun")
+            .navigationBarTitleDisplayMode(.inline)
         }
         .environmentObject(settings)
         .environmentObject(usageTracker)
@@ -177,69 +181,48 @@ struct ContentView: View {
         }
     }
 
-    private var header: some View {
-        VStack(spacing: 8) {
-            Image("AppIconDisplay")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-            Text("YouTube Running Gate")
-                .font(.title2)
-                .bold()
-        }
-        .padding(.top, 8)
-    }
+    // One combined card instead of the separate "hard limits" and
+    // "ledger" cards this used to be — every number here is implicitly
+    // "today" (or whichever day is selected below), so none of the
+    // individual tiles repeat that in their own label. Prev/next
+    // navigation and the trend/pie charts only make sense with the
+    // Energy Ledger on; with it off this just shows the two hard-limit
+    // tiles, same as the original `statsCard` did.
+    private var dashboardBox: some View {
+        VStack(spacing: 12) {
+            if settings.enableEnergyLedger {
+                dateNavigationHeader
+            }
 
-    // A free-account install has a hard expiration date baked into its
-    // own provisioning profile (see ProvisioningProfile) — this is
-    // nil (and the banner just doesn't appear) for a build that has no
-    // such profile at all, e.g. a real App Store/TestFlight build.
-    private var expiryBanner: AnyView? {
-        guard let expirationDate = ProvisioningProfile.expirationDate,
-              let daysRemaining = ProvisioningProfile.daysRemaining() else {
-            return nil
-        }
-        let isUrgent = daysRemaining <= 2
-        let dateText = expirationDate.formatted(date: .abbreviated, time: .omitted)
-        let daysText = daysRemaining <= 0 ? "today" : "\(daysRemaining)d"
+            LazyVGrid(columns: gridColumns, spacing: 10) {
+                if isSelectedDateToday {
+                    statTile(title: "Daily left", value: minutesText(usageTracker.remainingDailySeconds(dailyLimitMinutes: settings.dailyLimitMinutes)))
+                    statTile(title: "Binge left", value: minutesText(usageTracker.bingeRemainingSeconds(bingeLimitMinutes: settings.bingeLimitMinutes)))
+                }
+                if settings.enableEnergyLedger, let stats = energyLedgerManager.stats(for: selectedDate) {
+                    navigableStatTile(title: "Earned", value: minutesText(stats.earnedSeconds)) { CreditBreakdownView() }
+                    navigableStatTile(title: "Spent", value: minutesText(stats.spentSeconds)) { UsageBreakdownView() }
+                    statTile(
+                        title: isSelectedDateToday ? (stats.netSeconds < 0 ? "You owe" : "Balance") : "Net",
+                        value: minutesText(abs(isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds)),
+                        tint: (isSelectedDateToday ? energyLedgerManager.balanceSeconds : stats.netSeconds) < 0 ? .red : .green
+                    )
+                    statTile(title: "Videos", value: "\(stats.videoCount)")
+                }
+            }
 
-        return AnyView(HStack(spacing: 6) {
-            Image(systemName: isUrgent ? "exclamationmark.triangle.fill" : "clock")
-            Text("Expires \(daysText) · \(dateText)")
+            if settings.enableEnergyLedger {
+                Divider()
+                // Trend first (the "how am I doing lately" question),
+                // then the selected day's mix — matches the order asked
+                // for these ("last seven days... then today's spend and
+                // activities").
+                BalanceTrendChart()
+                CategoryPieChart(date: selectedDate)
+            }
         }
-        .font(.caption)
-        .fontWeight(isUrgent ? .semibold : .regular)
-        .foregroundStyle(isUrgent ? Color.red : .secondary)
-        .lineLimit(1)
+        .padding(.vertical, 16)
         .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-        .background(
-            (isUrgent ? Color.red : Color.secondary).opacity(0.12),
-            in: Capsule()
-        ))
-    }
-
-    private var statsCard: some View {
-        HStack(spacing: 0) {
-            RemainingMinutesLabel(
-                title: "Remaining today",
-                remainingSeconds: usageTracker.remainingDailySeconds(dailyLimitMinutes: settings.dailyLimitMinutes),
-                limitSeconds: settings.dailyLimitMinutes * 60
-            )
-            .frame(maxWidth: .infinity)
-
-            Divider().frame(height: 44)
-
-            RemainingMinutesLabel(
-                title: "Binge",
-                remainingSeconds: usageTracker.bingeRemainingSeconds(bingeLimitMinutes: settings.bingeLimitMinutes),
-                limitSeconds: settings.bingeLimitMinutes * 60
-            )
-            .frame(maxWidth: .infinity)
-        }
-        .padding(.vertical, 18)
         .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
         // An active cooldown only lifts once its timer passes, and a
@@ -255,80 +238,69 @@ struct ContentView: View {
         }
     }
 
-    // A rolling honesty balance (see `EnergyLedgerManager`) surfaced here
-    // as three numbers — today's earn/spend, plus the running balance —
-    // with the first two drilling into a breakdown. Deliberately a
-    // separate card from `statsCard` above rather than folded into it:
-    // that one reflects the hard daily/binge gates, this one is the
-    // parallel, non-blocking ledger, and conflating them would make the
-    // "this doesn't replace your hard limits" distinction less obvious.
-    private var balanceSheetCard: some View {
-        VStack(spacing: 12) {
-            balanceSheetNumbers
-
-            Divider()
-
-            // Trend first (the "how am I doing lately" question), then
-            // today's mix — matches the order the user asked for these
-            // ("last seven days... then today's spend and activities").
-            BalanceTrendChart()
-
-            TodayCategoryPieChart()
-        }
-        .padding(.vertical, 18)
-        .padding(.horizontal, 12)
-        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 4)
-    }
-
-    private var balanceSheetNumbers: some View {
-        HStack(spacing: 0) {
-            NavigationLink {
-                CreditBreakdownView()
+    private var dateNavigationHeader: some View {
+        HStack {
+            Button {
+                if let previous = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) {
+                    selectedDate = previous
+                }
             } label: {
-                balanceSheetColumn(title: "Earned today", seconds: energyLedgerManager.todayEarnedSeconds, tint: .primary)
+                Image(systemName: "chevron.left")
             }
-            .buttonStyle(.plain)
+            .disabled(energyLedgerManager.stats(for: Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate) == nil)
 
-            Divider().frame(height: 44)
+            Spacer()
 
-            NavigationLink {
-                UsageBreakdownView()
+            Text(isSelectedDateToday ? "Today" : selectedDate.formatted(date: .abbreviated, time: .omitted))
+                .font(.subheadline)
+                .fontWeight(.semibold)
+
+            Spacer()
+
+            Button {
+                if let next = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) {
+                    selectedDate = min(next, Calendar.current.startOfDay(for: Date()))
+                }
             } label: {
-                // Watched time plus any late-night penalty (see
-                // `EnergyLedgerManager.todayLateNightPenaltySeconds`,
-                // always ≤ 0) — folded in here rather than left out, so
-                // "Earned − Spent" shown across these two columns always
-                // agrees with the Balance column's today-contribution.
-                balanceSheetColumn(
-                    title: "Spent today",
-                    seconds: energyLedgerManager.todaySpentSeconds - energyLedgerManager.todayLateNightPenaltySeconds,
-                    tint: .primary
-                )
+                Image(systemName: "chevron.right")
             }
-            .buttonStyle(.plain)
-
-            Divider().frame(height: 44)
-
-            balanceSheetColumn(
-                title: energyLedgerManager.balanceSeconds < 0 ? "You owe" : "Balance",
-                seconds: abs(energyLedgerManager.balanceSeconds),
-                tint: energyLedgerManager.balanceSeconds < 0 ? .red : .green
-            )
-            .frame(maxWidth: .infinity)
+            .disabled(isSelectedDateToday)
         }
     }
 
-    private func balanceSheetColumn(title: String, seconds: Int, tint: Color) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text("\(seconds / 60) min")
-                .font(.headline)
+    private func minutesText(_ seconds: Int) -> String {
+        "\(seconds / 60)m"
+    }
+
+    private func statTile(title: String, value: String, tint: Color = .primary) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.subheadline)
+                .fontWeight(.semibold)
                 .foregroundStyle(tint)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    // Only "today" drills into a breakdown — those two detail screens
+    // read `EnergyLedgerManager`'s today-only published fields, so a
+    // past day's tile just shows its own numbers without navigating
+    // anywhere.
+    @ViewBuilder
+    private func navigableStatTile<Destination: View>(title: String, value: String, @ViewBuilder destination: @escaping () -> Destination) -> some View {
+        if isSelectedDateToday {
+            NavigationLink(destination: destination) {
+                statTile(title: title, value: value)
+            }
+            .buttonStyle(.plain)
+        } else {
+            statTile(title: title, value: value)
+        }
     }
 }
 

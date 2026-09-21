@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct SettingsView: View {
     // `@EnvironmentObject` reads a shared instance placed into the
@@ -13,11 +14,14 @@ struct SettingsView: View {
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var aiGatewayClient: AIGatewayClient
     @EnvironmentObject var webViewStore: YouTubeWebViewStore
+    @EnvironmentObject var energyLedgerManager: EnergyLedgerManager
+    @Environment(\.modelContext) private var modelContext
 
     @State private var showingResetConfirmation = false
     @State private var isTestingConnection = false
     @State private var connectionTestMessage: String?
     @State private var showingClearDataConfirmation = false
+    @State private var showingResetBalanceConfirmation = false
 
     var body: some View {
         // Form gives us the standard iOS Settings-app look (grouped rows)
@@ -207,6 +211,9 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    Button("Reset Balance", role: .destructive) {
+                        showingResetBalanceConfirmation = true
+                    }
                 }
             } header: {
                 sectionHeader("Energy Ledger", info: "A separate, honesty-based balance — not another hard limit. Tracks steps (read passively from your phone's own step history, minus whatever a live Walk session already used) and claimed exercise/run credit against actual watch time, over the rolling window below. Shown on the Locked screen along with a \"Use Credit\" button that grants extra time without exercising first, pushing the balance into deficit with no ceiling — paying it back later is entirely up to you.")
@@ -321,6 +328,18 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
+            "Reset Energy Ledger balance?",
+            isPresented: $showingResetBalanceConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset Balance", role: .destructive) {
+                energyLedgerManager.resetBalance(settings: settings, modelContext: modelContext)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Starts the balance fresh from right now — nothing earlier counts toward it anymore. Your actual watch history and Daily History reports are unaffected.")
+        }
+        .confirmationDialog(
             "Clear YouTube data?",
             isPresented: $showingClearDataConfirmation,
             titleVisibility: .visible
@@ -399,4 +418,6 @@ struct SettingsView: View {
     .environmentObject(UsageTracker())
     .environmentObject(AIGatewayClient())
     .environmentObject(YouTubeWebViewStore())
+    .environmentObject(EnergyLedgerManager())
+    .modelContainer(for: [LedgerEvent.self], inMemory: true)
 }

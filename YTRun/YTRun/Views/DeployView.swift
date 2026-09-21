@@ -47,6 +47,17 @@ struct DeployView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                if let expirationDate = ProvisioningProfile.expirationDate,
+                   let daysRemaining = ProvisioningProfile.daysRemaining() {
+                    let isUrgent = daysRemaining <= 2
+                    HStack {
+                        Text("Expires")
+                        Spacer()
+                        Text("\(daysRemaining <= 0 ? "today" : "\(daysRemaining)d") · \(expirationDate.formatted(date: .abbreviated, time: .omitted))")
+                            .foregroundStyle(isUrgent ? .red : .secondary)
+                            .fontWeight(isUrgent ? .semibold : .regular)
+                    }
+                }
                 if isChecking {
                     HStack {
                         ProgressView()
