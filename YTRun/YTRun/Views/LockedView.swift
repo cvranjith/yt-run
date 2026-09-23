@@ -16,6 +16,7 @@ struct LockedView: View {
     @EnvironmentObject var usageTracker: UsageTracker
     @EnvironmentObject var walkModeManager: WalkModeManager
     @EnvironmentObject var energyLedgerManager: EnergyLedgerManager
+    @EnvironmentObject var webViewStore: YouTubeWebViewStore
     // The YouTube screen hides the native back button throughout (see
     // `YouTubeView`'s own custom Home button), and this view replaces
     // that screen's content entirely while locked — so without this,
@@ -107,9 +108,27 @@ struct LockedView: View {
         // this timer an expired cooldown would never get noticed — the
         // screen would stay stuck showing Locked even after the wait is
         // over.
+        //
+        // Also the real enforcement for the lock itself: YouTubeView's own
+        // per-second tick (which used to be the only thing calling
+        // `forceStopAudio()`) only exists while its *unlocked* branch is
+        // on screen — the instant this view replaces it, that timer is
+        // torn down along with it. A single one-shot `forceStopAudio()`
+        // at the moment of locking (still in YouTubeView) isn't reliable
+        // enough on its own — deactivating the audio session can
+        // genuinely fail (a real, if uncommon, AVAudioSession outcome),
+        // and previously nothing ever retried it once this screen was
+        // showing, so playback could keep going indefinitely just by
+        // doing nothing. Retrying it here every second for as long as
+        // this screen is actually on screen means a failed attempt gets
+        // another chance within a second rather than never again — and
+        // this timer already keeps firing with the phone locked, so it
+        // covers that case too, not just the app being foregrounded on
+        // this screen.
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
             usageTracker.refreshBingeState()
             energyLedgerManager.refresh(modelContext: modelContext, settings: settings)
+            webViewStore.forceStopAudio()
         }
     }
 
@@ -144,4 +163,5 @@ struct LockedView: View {
         .environmentObject(UsageTracker())
         .environmentObject(WalkModeManager())
         .environmentObject(EnergyLedgerManager())
+        .environmentObject(YouTubeWebViewStore())
 }
