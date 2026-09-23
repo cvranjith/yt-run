@@ -95,6 +95,9 @@ struct StairClimbView: View {
             case .clearedCooldown:
                 rewardMessage = "Cooldown cleared — no extra time needed right now."
             }
+            // Zero seconds — see ExerciseTrainingView.claimReward()'s
+            // identical reasoning.
+            modelContext.insert(LedgerEvent(date: .now, seconds: 0, note: "\(sets * floorsPerSet) floors climbed — used to unlock directly", source: .stairs))
         } else {
             modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * floorsPerSet) floors climbed", source: .stairs))
             rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."

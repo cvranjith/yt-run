@@ -188,6 +188,12 @@ struct ExerciseTrainingView: View {
             case .clearedCooldown:
                 rewardMessage = "Cooldown cleared — no extra time needed right now."
             }
+            // Zero seconds — not counted a second time toward Earned,
+            // since this set already went straight to unlocking/
+            // extending today's allowance. Still recorded so Credits
+            // Earned shows what happened to every claimed set, not just
+            // the ones that banked ledger currency.
+            modelContext.insert(LedgerEvent(date: .now, seconds: 0, note: "\(sets * repsPerSet) \(kind.displayName.lowercased()) — used to unlock directly", source: kind.ledgerSource))
         } else {
             modelContext.insert(LedgerEvent(date: .now, seconds: seconds, note: "\(sets * repsPerSet) \(kind.displayName.lowercased())", source: kind.ledgerSource))
             rewardMessage = "+\(seconds) seconds banked to your Energy Ledger."

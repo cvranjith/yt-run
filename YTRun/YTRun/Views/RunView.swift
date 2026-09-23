@@ -38,10 +38,11 @@ struct RunView: View {
         // reward went straight to `UsageTracker` instead of the ledger.
         // See `UsageTracker.isLockedOut`.
         let rewardOutcome: RunRewardOutcome?
-        // Held directly (not re-queried) so Discard can delete exactly
-        // the event this run inserted, when the reward went to the
-        // Energy Ledger instead (`rewardOutcome == nil`).
-        let ledgerEvent: LedgerEvent?
+        // Always set now — a locked-out run still gets a zero-value
+        // record for transparency (see `finishRun`). Held directly (not
+        // re-queried) so Discard can delete exactly the event this run
+        // inserted, regardless of which case it was.
+        let ledgerEvent: LedgerEvent
     }
 
     @State private var pendingRun: PendingRun?
@@ -153,15 +154,22 @@ struct RunView: View {
         let distanceText = String(format: "%.2f km", distanceKm)
 
         let outcome: RunRewardOutcome?
-        var ledgerEvent: LedgerEvent?
+        let event: LedgerEvent
         if usageTracker.isLockedOut(dailyLimitMinutes: settings.dailyLimitMinutes) {
             outcome = usageTracker.completeExerciseReward(seconds: rewardSeconds)
+            // Zero seconds — deliberately not counted a second time
+            // toward Earned, since this run already went straight to
+            // unlocking/extending today's allowance instead. Still
+            // recorded (rather than nothing at all) so Credits Earned
+            // shows what actually happened to every run, not just the
+            // ones that banked ledger currency.
+            event = LedgerEvent(date: finishedAt, seconds: 0, note: "\(distanceText) run — used to unlock directly", source: .run)
         } else {
             outcome = nil
-            let event = LedgerEvent(date: finishedAt, seconds: rewardSeconds, note: "\(distanceText) run", source: .run)
-            modelContext.insert(event)
-            ledgerEvent = event
+            event = LedgerEvent(date: finishedAt, seconds: rewardSeconds, note: "\(distanceText) run", source: .run)
         }
+        modelContext.insert(event)
+        let ledgerEvent = event
 
         pendingRun = PendingRun(
             finishedAt: finishedAt,
@@ -212,9 +220,11 @@ struct RunView: View {
         guard let pendingRun else { return }
         if pendingRun.rewardOutcome == .grantedDailyMinutes {
             usageTracker.revokeBonusSeconds(pendingRun.rewardSeconds)
-        } else if let ledgerEvent = pendingRun.ledgerEvent {
-            modelContext.delete(ledgerEvent)
         }
+        // A ledger record exists either way now (see `finishRun`) — a
+        // discarded run shouldn't leave either a real banked entry or a
+        // zero-value transparency one behind.
+        modelContext.delete(pendingRun.ledgerEvent)
     }
 
     private var formattedDuration: String {
